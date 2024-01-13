@@ -1,0 +1,7 @@
+fastapi==0.108.0
+pydantic==1.10.0
+sse_starlette==1.6.5
+starlette==0.34.0
+torch==2.1.2+cu121
+transformers==4.32.0
+uvicorn==0.25.0
