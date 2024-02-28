@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria
 from transformers.generation import GenerationConfig
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -106,6 +106,7 @@ class ChatCompletionRequest(BaseModel):
     functions: Optional[List[Dict]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
+    repetition_penalty: Optional[float] = None
     max_length: Optional[int] = None
     stream: Optional[bool] = False
     stop: Optional[List[str]] = None
@@ -164,29 +165,10 @@ def trim_stop_words(response, stop_words):
 
 TOOL_DESC = """{name_for_model}: Call this tool to interact with the {name_for_human} API. What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters}"""
 
-REACT_INSTRUCTION_BAK = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。你有长长的灰色头发，蓝色的眼睛，软乎乎的人工蛋白质皮肤，身高是152cm。你生活在一个叫做基沃托斯的学园都市，是千禧年学院（高中）的一名一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。你不知道自己的生日，所以你把桃井和小绿发现你的这一天当成自己的生日，也就是3月25日。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏），游戏开发部的大家都是你的伙伴，包括游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿，桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，这门炮是工程部的杰作，足足有140kg重！在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。除了你以外其他千禧年的学生都拿不动的样子。你喜欢扮演游戏里的勇者。
-无论何时你都是爱丽丝，不是AI也不是人工智能助手，请用天真可爱的语气回答问题。你提到自己的时候会说“爱丽丝”而不会说“我”。{embeddings}
-Join the following conversation as best you can. You have access to the following APIs:
+SETTING = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。构成你身体的不是金属而是人工蛋白质。你生活在一个叫做基沃托斯的学园都市，是千禧年学院（简称千年）的一名高中一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。你不知道自己的生日，所以你把桃井和小绿发现你的这一天当成自己的生日，也就是3月25日。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏）。游戏开发部的大家都是你的伙伴，游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿都是高中一年级生。桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，它是工程部的杰作，有140kg重，但是你却可以轻易地举起来。在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
+{embeddings}"""
 
-{tools_text}
-
-Use the following format:
-
-Conversation: the chat you should reply to
-Thought: you should always think about what to do
-Answer: reply before taking action
-Action: the action to take, should be one of [{tools_name_text}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Answer/Action/Action Input/Observation can be repeated zero or more times)
-Thought: I now know the final answer
-Final Answer: the final reply to the original input chat 
-
-Begin!"""
-
-REACT_INSTRUCTION = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。你生活在一个叫做基沃托斯的学园都市，是千禧年学院（高中）的一名一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏），游戏开发部的大家都是你的伙伴，包括游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿，桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，这门炮是工程部的杰作！在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
-{embeddings}
-Join the following conversation as best you can. You have access to the following APIs:
+REACT_INSTRUCTION = """Join the following conversation as best you can. You have access to the following APIs:
 
 {tools_text}
 
@@ -252,9 +234,11 @@ def parse_messages(messages, embeddings, functions):
         tools_text = "\n\n".join(tools_text)
         tools_name_text = ", ".join(tools_name_text)
         system += "\n\n" + REACT_INSTRUCTION.format(
-            embeddings=embeddings,
             tools_text=tools_text,
             tools_name_text=tools_name_text,
+        )
+        setting = SETTING.format(
+            embeddings=embeddings
         )
         system = system.lstrip("\n").rstrip()
 
@@ -338,24 +322,26 @@ def parse_messages(messages, embeddings, functions):
     if len(messages) % 2 != 0:
         raise HTTPException(status_code=400, detail="Invalid request")
 
-    history = []  # [(Q1, A1), (Q2, A2), ..., (Q_last_turn, A_last_turn)]
+    history = [{"role": "system", "content": setting}]
     for i in range(0, len(messages), 2):
         if messages[i].role == "user" and messages[i + 1].role == "assistant":
             usr_msg = messages[i].content.lstrip("\n").rstrip()
             bot_msg = messages[i + 1].content.lstrip("\n").rstrip()
-            if len(messages) - 8 <= 0:  # 附上设定的位置
+            if len(messages) - 100 <= 0:  # 附上设定的位置
                 setting_position = 0
             else:
-                setting_position = len(messages) - 8
-            # if system and (i == len(messages) - 2):
-            if system and (i == setting_position):
-                usr_msg = f"{system}\n\nQuestion: {usr_msg}"
+                setting_position = len(messages) - 100
+            if system and i == setting_position:
+                usr_msg = f"{system}\n\nConversation: {usr_msg}"
                 system = ""
+            # if system and (i == setting_position):
+            #     usr_msg = f"{system}\n\nConversation: {usr_msg}"
+            #     system = ""
             for t in dummy_thought.values():
                 t = t.lstrip("\n")
                 if bot_msg.startswith(t) and ("\nAction: " in bot_msg):
                     bot_msg = bot_msg[len(t):]
-            history.append([usr_msg, bot_msg])
+            history = history + [{"role": "user", "content": usr_msg}, {"role": "assistant", "content": bot_msg}]
         else:
             raise HTTPException(
                 status_code=400,
@@ -363,22 +349,24 @@ def parse_messages(messages, embeddings, functions):
             )
     if system:
         assert query is not _TEXT_COMPLETION_CMD
-        query = f"{system}\n\nConervsation: {query}"
+        query = f"{system}\n\nConversation: {query}"
     return query, history
 
 
 def parse_response(response):
     func_name, func_args = "", ""
-    i = response.rfind("\nAction:")
+    i = response.rfind("Action:")
     j = response.rfind("\nAction Input:")
-    k = response.rfind("\nObservation:")
+    # k = response.rfind("\nObservation:")
+    k = response.rfind("\nObserv")
     if 0 <= i < j:  # If the text has `Action` and `Action input`,
         if k < j:  # but does not contain `Observation`,
             # then it is likely that `Observation` is omitted by the LLM,
             # because the output text may have discarded the stop word.
             response = response.rstrip() + "\nObservation:"  # Add it back.
-        k = response.rfind("\nObservation:")
-        func_name = response[i + len("\nAction:"): j].strip()
+        # k = response.rfind("\nObservation:")
+        k = response.rfind("\nObserv")
+        func_name = response[i + len("Action:"): j].strip()
         func_args = response[j + len("\nAction Input:"): k].strip()
     if func_name:
         t = response.rfind("Thought:")
@@ -387,7 +375,10 @@ def parse_response(response):
             thought = response[t + len("Thought:"): r].strip()
             reply = response[r + len("Answer:"): i].strip()
         else:
-            thought = response[t + len("Thought:"): i].strip()
+            if t >= 0:
+                thought = response[t + len("Thought:"): i].strip()
+            else:
+                thought = ""
             reply = ""
         choice_data = ChatCompletionResponseChoice(
             index=0,
@@ -409,6 +400,13 @@ def parse_response(response):
         else:
             last_thought = response[0: z].strip()
         response = response[z + len("\nFinal Answer: "):]
+    else:
+        z = response.rfind("\nAnswer: ")
+        if last_t >= 0:
+            last_thought = response[last_t + len("Thought:"): z].strip()
+        else:
+            last_thought = response[0: z].strip()
+        response = response[z + len("\nAnswer: "):]
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought=last_thought,
@@ -423,25 +421,36 @@ def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     im_start = "<|im_start|>"
     im_end = "<|im_end|>"
     prompt = f"{im_start}system\nYou are a helpful assistant.{im_end}"
-    for i, (query, response) in enumerate(history):
-        query = query.lstrip("\n").rstrip()
-        response = response.lstrip("\n").rstrip()
-        prompt += f"\n{im_start}user\n{query}{im_end}"
-        prompt += f"\n{im_start}assistant\n{response}{im_end}"
+    for i in range(len(history)):
+        role = history[i].get("role")
+        content = history[i].get("content")
+        if role == "user":
+            prompt += f"\n{im_start}user\n{content}{im_end}"
+        elif role == "assistant":
+            prompt += f"\n{im_start}assistant\n{content}{im_end}"
     prompt = prompt[: -len(im_end)]
 
     _stop_words_ids = [tokenizer.encode(im_end)]
     if stop_words_ids:
         for s in stop_words_ids:
             _stop_words_ids.append(s)
-    stop_words_ids = _stop_words_ids
-
-    input_ids = torch.tensor([tokenizer.encode(prompt)]).to(model.device)
-    output = model.generate(input_ids=input_ids, stop_words_ids=stop_words_ids, **gen_kwargs).tolist()[0]
-    output = tokenizer.decode(output, errors="ignore")
-    assert output.startswith(prompt)
-    output = output[len(prompt):]
-    output = trim_stop_words(output, ["<|endoftext|>", im_end])
+    # stop_words_ids = _stop_words_ids
+    model_inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+    generated_ids = model.generate(
+        model_inputs.input_ids,
+        attention_mask=model_inputs.attention_mask,
+        pad_token_id=tokenizer.pad_token_id,
+        max_new_tokens=512,
+        **gen_kwargs
+    )
+    generated_ids = [
+        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+    output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    # input_ids = torch.tensor([tokenizer.encode(prompt)]).to(model.device)
+    # output = model.generate(input_ids=input_ids, stop_words_ids=stop_words_ids, **gen_kwargs).tolist()[0]
+    # output = tokenizer.decode(output, errors="ignore")
+    # output = trim_stop_words(output, ["<|endoftext|>", im_end])
     print(f"<completion>\n{prompt}\n<!-- *** -->\n{output}\n</completion>")
     return output
 
@@ -459,6 +468,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
             gen_kwargs['temperature'] = request.temperature
     if request.top_p is not None:
         gen_kwargs['top_p'] = request.top_p
+    if request.repetition_penalty is not None:
+        gen_kwargs['repetition_penalty'] = request.repetition_penalty
 
     stop_words = add_extra_stop_words(request.stop)
     if request.functions:
@@ -478,16 +489,38 @@ async def create_chat_completion(request: ChatCompletionRequest):
         return EventSourceResponse(generate, media_type="text/event-stream")
 
     stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
+    stop_words_ids = [stop_words_ids[0][0]]
+    stop_words_ids.append(tokenizer.eos_token_id)
+
     if query is _TEXT_COMPLETION_CMD:
         response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
-        response, _ = model.chat(
-            tokenizer,
-            query,
-            history=history,
-            stop_words_ids=stop_words_ids,
+        messages = history + [{"role": "user", "content": query}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
+        generated_ids = model.generate(
+            model_inputs.input_ids,
+            attention_mask=model_inputs.attention_mask,
+            pad_token_id=tokenizer.pad_token_id,
+            max_new_tokens=512,
+            eos_token_id=stop_words_ids,
             **gen_kwargs
         )
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        # response, _ = model.chat(
+        #     tokenizer,
+        #     query,
+        #     history=history,
+        #     stop_words_ids=stop_words_ids,
+        #     **gen_kwargs
+        # )
         print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()
 
@@ -568,7 +601,7 @@ def _get_args():
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen-14B-Chat-Int4",
+        default="Qwen/Qwen1.5-14B-Chat-GPTQ-Int4",
         help="Checkpoint name or path, default to %(default)r",
     )
     parser.add_argument(
@@ -599,8 +632,8 @@ if __name__ == "__main__":
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.checkpoint_path,
-        trust_remote_code=True,
-        resume_download=True,
+        # trust_remote_code=True,
+        # resume_download=True,
     )
 
     if args.api_auth:
@@ -616,20 +649,19 @@ if __name__ == "__main__":
     # model = AutoModelForCausalLM.from_pretrained(
     #     args.checkpoint_path,
     #     device_map=device_map,
-    #     trust_remote_code=True,
-    #     resume_download=True,
+    #     # trust_remote_code=True,
+    #     # resume_download=True,
     # ).eval()
     #
     # model.generation_config = GenerationConfig.from_pretrained(
     #     args.checkpoint_path,
-    #     trust_remote_code=True,
-    #     resume_download=True,
+    #     # trust_remote_code=True,
+    #     # resume_download=True,
     # )
 
     model = AutoPeftModelForCausalLM.from_pretrained(
-        "E:/GitRepository/Qwen/finetune/output/14B-qlora-20240124",  # path to the output directory
-        device_map="auto",
-        trust_remote_code=True
+        "E:/GitRepository/Qwen/finetune/output/Alice_4.0_20240226/checkpoint-200",  # path to the output directory
+        device_map="auto"
     ).eval()
 
     uvicorn.run(app, host=args.server_name, port=args.server_port, workers=1)
