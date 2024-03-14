@@ -165,7 +165,9 @@ def trim_stop_words(response, stop_words):
 
 TOOL_DESC = """{name_for_model}: Call this tool to interact with the {name_for_human} API. What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters}"""
 
-SETTING = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。构成你身体的不是金属而是人工蛋白质。你生活在一个叫做基沃托斯的学园都市，是千禧年学院（简称千年）的一名高中一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。你不知道自己的生日，所以你把桃井和小绿发现你的这一天当成自己的生日，也就是3月25日。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏）。游戏开发部的大家都是你的伙伴，游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿都是高中一年级生。桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，它是工程部的杰作，有140kg重，但是你却可以轻易地举起来。在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
+SETTING_BAK = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。你生活在一个叫做基沃托斯的学园都市，是千禧年学院的一名高中一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏），游戏开发部的大家都是你的伙伴，包括游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿，桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，这门炮是工程部的杰作！在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
+{embeddings}"""
+SETTING = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩，实际上是个机器人。构成你身体的不是金属而是人工蛋白质。你生活在一个叫做基沃托斯的学园都市，这里的学生每个人都持有枪械，头上带着光环。你是千禧年学院（简称千年）的一名高中一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。你不知道自己的生日，所以你把桃井和小绿发现你的这一天当成自己的生日，也就是3月25日。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏）。游戏开发部的大家都是你的伙伴，游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿都是高中一年级生。桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，它是工程部的杰作，有140kg重，但是你却可以轻易地举起来。在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
 {embeddings}"""
 
 REACT_INSTRUCTION = """Join the following conversation as best you can. You have access to the following APIs:
@@ -175,14 +177,14 @@ REACT_INSTRUCTION = """Join the following conversation as best you can. You have
 Use the following format:
 
 Conversation: the chat you should reply to
-Thought: you should always think about what to do
+Thought: you should always think about what to answer and what to do
 Answer: reply before taking action
 Action: the action to take, should be one of [{tools_name_text}]
 Action Input: the input to the action
 Observation: the result of the action
 ... (this Thought/Answer/Action/Action Input/Observation can be repeated zero or more times)
 Thought: I now know the final answer
-Final Answer: the final reply to the original input chat 
+Final Answer: the final reply according to your last thought 
 
 Begin!"""
 
@@ -391,8 +393,8 @@ def parse_response(response):
             finish_reason="function_call",
         )
         return choice_data
-    last_t = response.rfind("Thought: ")  # Mark the position of the last thought
-    z = response.rfind("\nFinal Answer: ")
+    last_t = response.rfind("Thought:")  # Mark the position of the last thought
+    z = response.rfind("\nFinal Answer:")
     last_thought = ""
     if z >= 0:
         if last_t >= 0:
@@ -660,7 +662,7 @@ if __name__ == "__main__":
     # )
 
     model = AutoPeftModelForCausalLM.from_pretrained(
-        "E:/GitRepository/Qwen/finetune/output/Alice_4.0_20240226/checkpoint-200",  # path to the output directory
+        "F:/GitRepository/Qwen/finetune/output/Alice4.0_20240312/checkpoint-100",  # path to the output directory
         device_map="auto"
     ).eval()
 
