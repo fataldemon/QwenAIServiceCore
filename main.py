@@ -14,9 +14,9 @@ from typing import Dict, List, Literal, Optional, Union
 from peft import AutoPeftModelForCausalLM
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sse_starlette.sse import EventSourceResponse
 from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria
 from transformers.generation import GenerationConfig
@@ -213,6 +213,9 @@ def parse_messages(messages, embeddings, functions):
         if system == default_system:
             system = ""
 
+    setting = SETTING.format(
+        embeddings=embeddings
+    )
     if functions:
         tools_text = []
         tools_name_text = []
@@ -239,9 +242,7 @@ def parse_messages(messages, embeddings, functions):
             tools_text=tools_text,
             tools_name_text=tools_name_text,
         )
-        setting = SETTING.format(
-            embeddings=embeddings
-        )
+
         system = system.lstrip("\n").rstrip()
 
     dummy_thought = {
@@ -457,11 +458,68 @@ def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     return output
 
 
+# 在剥离Lora的情况下进行推理（Qwen1.5原生）
+def original_completion(message: list, gen_kwargs) -> str:
+
+    with model.disable_adapter():
+        text = tokenizer.apply_chat_template(
+            message,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
+        generated_ids = model.generate(
+            model_inputs.input_ids,
+            attention_mask=model_inputs.attention_mask,
+            pad_token_id=tokenizer.pad_token_id,
+            max_new_tokens=512,
+            **gen_kwargs
+        )
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        return response
+
+
+@app.post("/v1/assistant/completions", response_model=ChatCompletionResponse)
+async def completion_without_lora(request: ChatCompletionRequest):
+    global model, tokenizer
+
+    gen_kwargs = {}
+    if request.temperature is not None:
+        if request.temperature < 0.01:
+            gen_kwargs['top_k'] = 1  # greedy decoding
+        else:
+            # Not recommended. Please tune top_p instead.
+            gen_kwargs['temperature'] = request.temperature
+    if request.top_p is not None:
+        gen_kwargs['top_p'] = request.top_p
+    if request.repetition_penalty is not None:
+        gen_kwargs['repetition_penalty'] = request.repetition_penalty
+
+    message = request.messages
+    print(f"{message}")
+    # 调用无Lora的大模型
+    response = original_completion(message, gen_kwargs=gen_kwargs)
+    print(f"Assistant:{response}")
+    choice_data = ChatCompletionResponseChoice(
+        index=0,
+        thought="",
+        message=ChatMessage(role="assistant", content=response),
+        finish_reason="stop",
+    )
+    return ChatCompletionResponse(
+        model=request.model, choices=[choice_data], object="chat.completion"
+    )
+
+
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest):
     global model, tokenizer
 
     gen_kwargs = {}
+    print(request)
     if request.temperature is not None:
         if request.temperature < 0.01:
             gen_kwargs['top_k'] = 1  # greedy decoding
@@ -491,8 +549,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
         return EventSourceResponse(generate, media_type="text/event-stream")
 
     stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
-    stop_words_ids = [stop_words_ids[0][0]]
-    stop_words_ids.append(tokenizer.eos_token_id)
+    if stop_words_ids is not None:
+        stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+    else:
+        stop_words_ids = [tokenizer.eos_token_id]
 
     if query is _TEXT_COMPLETION_CMD:
         response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
@@ -538,6 +598,91 @@ async def create_chat_completion(request: ChatCompletionRequest):
     return ChatCompletionResponse(
         model=request.model, choices=[choice_data], object="chat.completion"
     )
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    global model, tokenizer
+
+    await websocket.accept()
+    while True:
+        data = await websocket.receive_json()
+        print(f"Data received: {data}")
+        try:
+            request = ChatCompletionRequest.parse_obj(data)
+
+            gen_kwargs = {}
+            if request.temperature is not None:
+                if request.temperature < 0.01:
+                    gen_kwargs['top_k'] = 1  # greedy decoding
+                else:
+                    # Not recommended. Please tune top_p instead.
+                    gen_kwargs['temperature'] = request.temperature
+            if request.top_p is not None:
+                gen_kwargs['top_p'] = request.top_p
+            if request.repetition_penalty is not None:
+                gen_kwargs['repetition_penalty'] = request.repetition_penalty
+
+            stop_words = add_extra_stop_words(request.stop)
+            if request.functions:
+                stop_words = stop_words or []
+                if "Observation:" not in stop_words:
+                    stop_words.append("Observation:")
+
+            query, history = parse_messages(request.messages, request.embeddings, request.functions)
+
+            if request.stream:
+                if request.functions:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid request: Function calling is not yet implemented for stream mode.",
+                    )
+                generate = predict(query, history, request.model, stop_words, gen_kwargs)
+                return EventSourceResponse(generate, media_type="text/event-stream")
+
+            stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
+            if stop_words_ids is not None:
+                stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+            else:
+                stop_words_ids = [tokenizer.eos_token_id]
+
+            if query is _TEXT_COMPLETION_CMD:
+                response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
+            else:
+                messages = history + [{"role": "user", "content": query}]
+                text = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
+                generated_ids = model.generate(
+                    model_inputs.input_ids,
+                    attention_mask=model_inputs.attention_mask,
+                    pad_token_id=tokenizer.pad_token_id,
+                    max_new_tokens=512,
+                    eos_token_id=stop_words_ids,
+                    **gen_kwargs
+                )
+                generated_ids = [
+                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                ]
+                response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                # response, _ = model.chat(
+                #     tokenizer,
+                #     query,
+                #     history=history,
+                #     stop_words_ids=stop_words_ids,
+                #     **gen_kwargs
+                # )
+                print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
+            _gc()
+
+            response = trim_stop_words(response, stop_words)
+            await websocket.send_json(response)
+            print(f"Message sent: {response}")
+        except ValidationError as e:
+            print("数据验证失败：", e.json())
 
 
 def _dump_json(data: BaseModel, *args, **kwargs) -> str:
@@ -662,9 +807,11 @@ if __name__ == "__main__":
     # )
 
     model = AutoPeftModelForCausalLM.from_pretrained(
-        "F:/GitRepository/Qwen/finetune/output/Alice4.0_20240312/checkpoint-100",  # path to the output directory
+        "F:/GitRepository/Qwen/finetune/output/Alice4.1_20240512",  # path to the output directory
+        torch_dtype="auto",
         device_map="auto"
     ).eval()
 
     uvicorn.run(app, host=args.server_name, port=args.server_port, workers=1)
+
 
