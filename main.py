@@ -14,7 +14,7 @@ from typing import Dict, List, Literal, Optional, Union
 from peft import AutoPeftModelForCausalLM
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -23,6 +23,7 @@ from transformers.generation import GenerationConfig
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from websocketutils import WebsocketManager
 import base64
 
 
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):  # collects GPU memory
 
 
 app = FastAPI(lifespan=lifespan)
+websocket_manager = WebsocketManager()
 
 app.add_middleware(
     CORSMiddleware,
@@ -519,7 +521,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
     global model, tokenizer
 
     gen_kwargs = {}
-    print(request)
     if request.temperature is not None:
         if request.temperature < 0.01:
             gen_kwargs['top_k'] = 1  # greedy decoding
@@ -587,6 +588,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
     _gc()
 
     response = trim_stop_words(response, stop_words)
+
+    # 向websocket连接广播数据
+    await websocket_manager.broadcast(response)
+
     if request.functions:
         choice_data = parse_response(response)
     else:
@@ -604,85 +609,88 @@ async def create_chat_completion(request: ChatCompletionRequest):
 async def websocket_endpoint(websocket: WebSocket):
     global model, tokenizer
 
-    await websocket.accept()
-    while True:
-        data = await websocket.receive_json()
-        print(f"Data received: {data}")
-        try:
-            request = ChatCompletionRequest.parse_obj(data)
+    await websocket_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            print(f"Data received: {data}")
+            try:
+                request = ChatCompletionRequest.parse_obj(data)
 
-            gen_kwargs = {}
-            if request.temperature is not None:
-                if request.temperature < 0.01:
-                    gen_kwargs['top_k'] = 1  # greedy decoding
-                else:
-                    # Not recommended. Please tune top_p instead.
-                    gen_kwargs['temperature'] = request.temperature
-            if request.top_p is not None:
-                gen_kwargs['top_p'] = request.top_p
-            if request.repetition_penalty is not None:
-                gen_kwargs['repetition_penalty'] = request.repetition_penalty
+                gen_kwargs = {}
+                if request.temperature is not None:
+                    if request.temperature < 0.01:
+                        gen_kwargs['top_k'] = 1  # greedy decoding
+                    else:
+                        # Not recommended. Please tune top_p instead.
+                        gen_kwargs['temperature'] = request.temperature
+                if request.top_p is not None:
+                    gen_kwargs['top_p'] = request.top_p
+                if request.repetition_penalty is not None:
+                    gen_kwargs['repetition_penalty'] = request.repetition_penalty
 
-            stop_words = add_extra_stop_words(request.stop)
-            if request.functions:
-                stop_words = stop_words or []
-                if "Observation:" not in stop_words:
-                    stop_words.append("Observation:")
-
-            query, history = parse_messages(request.messages, request.embeddings, request.functions)
-
-            if request.stream:
+                stop_words = add_extra_stop_words(request.stop)
                 if request.functions:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid request: Function calling is not yet implemented for stream mode.",
+                    stop_words = stop_words or []
+                    if "Observation:" not in stop_words:
+                        stop_words.append("Observation:")
+
+                query, history = parse_messages(request.messages, request.embeddings, request.functions)
+
+                if request.stream:
+                    if request.functions:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid request: Function calling is not yet implemented for stream mode.",
+                        )
+                    generate = predict(query, history, request.model, stop_words, gen_kwargs)
+                    return EventSourceResponse(generate, media_type="text/event-stream")
+
+                stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
+                if stop_words_ids is not None:
+                    stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+                else:
+                    stop_words_ids = [tokenizer.eos_token_id]
+
+                if query is _TEXT_COMPLETION_CMD:
+                    response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
+                else:
+                    messages = history + [{"role": "user", "content": query}]
+                    text = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True
                     )
-                generate = predict(query, history, request.model, stop_words, gen_kwargs)
-                return EventSourceResponse(generate, media_type="text/event-stream")
+                    model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
+                    generated_ids = model.generate(
+                        model_inputs.input_ids,
+                        attention_mask=model_inputs.attention_mask,
+                        pad_token_id=tokenizer.pad_token_id,
+                        max_new_tokens=512,
+                        eos_token_id=stop_words_ids,
+                        **gen_kwargs
+                    )
+                    generated_ids = [
+                        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                    ]
+                    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                    # response, _ = model.chat(
+                    #     tokenizer,
+                    #     query,
+                    #     history=history,
+                    #     stop_words_ids=stop_words_ids,
+                    #     **gen_kwargs
+                    # )
+                    print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
+                _gc()
 
-            stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
-            if stop_words_ids is not None:
-                stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
-            else:
-                stop_words_ids = [tokenizer.eos_token_id]
-
-            if query is _TEXT_COMPLETION_CMD:
-                response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
-            else:
-                messages = history + [{"role": "user", "content": query}]
-                text = tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True
-                )
-                model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
-                generated_ids = model.generate(
-                    model_inputs.input_ids,
-                    attention_mask=model_inputs.attention_mask,
-                    pad_token_id=tokenizer.pad_token_id,
-                    max_new_tokens=512,
-                    eos_token_id=stop_words_ids,
-                    **gen_kwargs
-                )
-                generated_ids = [
-                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                ]
-                response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                # response, _ = model.chat(
-                #     tokenizer,
-                #     query,
-                #     history=history,
-                #     stop_words_ids=stop_words_ids,
-                #     **gen_kwargs
-                # )
-                print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
-            _gc()
-
-            response = trim_stop_words(response, stop_words)
-            await websocket.send_json(response)
-            print(f"Message sent: {response}")
-        except ValidationError as e:
-            print("数据验证失败：", e.json())
+                response = trim_stop_words(response, stop_words)
+                await websocket.send_json(response)
+                print(f"Message sent: {response}")
+            except ValidationError as e:
+                print("数据验证失败：", e.json())
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(websocket)
 
 
 def _dump_json(data: BaseModel, *args, **kwargs) -> str:
