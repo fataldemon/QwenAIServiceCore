@@ -605,14 +605,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
     )
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+@app.websocket("/ws/{ws_mode}")
+async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取值为"text"和"binary"
     global model, tokenizer
 
     await websocket_manager.connect(websocket)
     try:
         while True:
-            data = await websocket.receive_json()
+            data = await websocket.receive_json(mode=ws_mode)
             print(f"Data received: {data}")
             try:
                 request = ChatCompletionRequest.parse_obj(data)
