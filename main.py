@@ -685,7 +685,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                 _gc()
 
                 response = trim_stop_words(response, stop_words)
-                await websocket.send_json(response)
+                await websocket_manager.send_message_to_client(response, websocket)
                 print(f"Message sent: {response}")
             except ValidationError as e:
                 print("数据验证失败：", e.json())
