@@ -756,7 +756,7 @@ def _get_args():
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen1.5-14B-Chat-GPTQ-Int4",
+        default="Qwen/Qwen2-7B-Instruct",
         help="Checkpoint name or path, default to %(default)r",
     )
     parser.add_argument(
@@ -803,6 +803,7 @@ if __name__ == "__main__":
 
     # model = AutoModelForCausalLM.from_pretrained(
     #     args.checkpoint_path,
+    #     torch_dtype="auto",
     #     device_map=device_map,
     #     # trust_remote_code=True,
     #     # resume_download=True,
@@ -815,7 +816,7 @@ if __name__ == "__main__":
     # )
 
     model = AutoPeftModelForCausalLM.from_pretrained(
-        "F:/GitRepository/Qwen/finetune/output/Alice4.1_20240512",  # path to the output directory
+        "F:/GitRepository/Qwen/finetune/output/Alice5.0_20240607",  # path to the output directory
         torch_dtype="auto",
         device_map="auto"
     ).eval()
