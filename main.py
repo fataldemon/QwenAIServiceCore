@@ -589,17 +589,18 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     response = trim_stop_words(response, stop_words)
 
-    # 向websocket连接广播数据
-    await websocket_manager.broadcast(response)
-
     if request.functions:
         choice_data = parse_response(response)
     else:
         choice_data = ChatCompletionResponseChoice(
             index=0,
+            thought="",
             message=ChatMessage(role="assistant", content=response),
             finish_reason="stop",
         )
+
+    # 向websocket连接广播数据
+    await websocket_manager.broadcast(choice_data.json())
     return ChatCompletionResponse(
         model=request.model, choices=[choice_data], object="chat.completion"
     )
@@ -685,7 +686,17 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                 _gc()
 
                 response = trim_stop_words(response, stop_words)
-                await websocket_manager.send_message_to_client(response, websocket)
+
+                if request.functions:
+                    choice_data = parse_response(response)
+                else:
+                    choice_data = ChatCompletionResponseChoice(
+                        index=0,
+                        thought="",
+                        message=ChatMessage(role="assistant", content=response),
+                        finish_reason="stop",
+                    )
+                await websocket_manager.send_message_to_client(choice_data.json(), websocket)
                 print(f"Message sent: {response}")
             except ValidationError as e:
                 print("数据验证失败：", e.json())
