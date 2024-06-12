@@ -10,6 +10,7 @@ import time
 from argparse import ArgumentParser
 from contextlib import asynccontextmanager
 from typing import Dict, List, Literal, Optional, Union
+from transformers.generation.logits_process import LogitsProcessorList
 
 from peft import AutoPeftModelForCausalLM
 import torch
@@ -25,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from websocketutils import WebsocketManager
 import base64
-
+from utils import StopWordsLogitsProcessor
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, username: str, password: str):
@@ -551,9 +552,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
     if stop_words_ids is not None:
-        stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+        # stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+        stop_words_logits_processor = StopWordsLogitsProcessor(
+            stop_words_ids=stop_words_ids,
+            eos_token_id=model.generation_config.eos_token_id,
+        )
+        logits_processor = LogitsProcessorList([stop_words_logits_processor])
     else:
         stop_words_ids = [tokenizer.eos_token_id]
+        logits_processor = None
 
     if query is _TEXT_COMPLETION_CMD:
         response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
@@ -570,7 +577,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
             attention_mask=model_inputs.attention_mask,
             pad_token_id=tokenizer.pad_token_id,
             max_new_tokens=512,
-            eos_token_id=stop_words_ids,
+            # eos_token_id=stop_words_ids,
+            logits_processor=logits_processor,
             **gen_kwargs
         )
         generated_ids = [
@@ -649,9 +657,15 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
 
                 stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
                 if stop_words_ids is not None:
-                    stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
+                    # stop_words_ids = [stop_words_ids, tokenizer.eos_token_id]
+                    stop_words_logits_processor = StopWordsLogitsProcessor(
+                        stop_words_ids=stop_words_ids,
+                        eos_token_id=model.generation_config.eos_token_id,
+                    )
+                    logits_processor = LogitsProcessorList([stop_words_logits_processor])
                 else:
-                    stop_words_ids = [tokenizer.eos_token_id]
+                    # stop_words_ids = [tokenizer.eos_token_id]
+                    logits_processor = None
 
                 if query is _TEXT_COMPLETION_CMD:
                     response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
@@ -668,7 +682,8 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
                         attention_mask=model_inputs.attention_mask,
                         pad_token_id=tokenizer.pad_token_id,
                         max_new_tokens=512,
-                        eos_token_id=stop_words_ids,
+                        # eos_token_id=stop_words_ids,
+                        logits_processor=logits_processor,
                         **gen_kwargs
                     )
                     generated_ids = [
@@ -767,7 +782,7 @@ def _get_args():
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen2-7B-Instruct",
+        default="Qwen/Qwen2-7B-Instruct-GPTQ-Int8",
         help="Checkpoint name or path, default to %(default)r",
     )
     parser.add_argument(
@@ -827,7 +842,7 @@ if __name__ == "__main__":
     # )
 
     model = AutoPeftModelForCausalLM.from_pretrained(
-        "F:/GitRepository/Qwen/finetune/output/Alice5.0_20240607",  # path to the output directory
+        "F:/GitRepository/Qwen/finetune/output/Alice5.0_20240612_Int8",  # path to the output directory
         torch_dtype="auto",
         device_map="auto"
     ).eval()
