@@ -2,8 +2,8 @@
 # Implements API for Qwen-7B in OpenAI's format. (https://platform.openai.com/docs/api-reference/chat)
 # Usage: python openai_api.py
 # Visit http://localhost:8000/docs for documents.
-
-import re
+import random
+import re, datetime
 import copy
 import json
 import time
@@ -11,8 +11,10 @@ from argparse import ArgumentParser
 from contextlib import asynccontextmanager
 from typing import Dict, List, Literal, Optional, Union
 from transformers.generation.logits_process import LogitsProcessorList
+from vllm import LLM, SamplingParams, AsyncEngineArgs, AsyncLLMEngine
+from vllm.lora.request import LoRARequest
 
-from peft import AutoPeftModelForCausalLM
+# from peft import AutoPeftModelForCausalLM
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -27,6 +29,7 @@ from starlette.responses import Response
 from websocketutils import WebsocketManager
 import base64
 from utils import StopWordsLogitsProcessor
+
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, username: str, password: str):
@@ -461,7 +464,7 @@ def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     return output
 
 
-# 在剥离Lora的情况下进行推理（Qwen1.5原生）
+# 在剥离Lora的情况下进行推理（Qwen2原生）
 def original_completion(message: list, gen_kwargs) -> str:
 
     with model.disable_adapter():
@@ -519,7 +522,7 @@ async def completion_without_lora(request: ChatCompletionRequest):
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest):
-    global model, tokenizer
+    global tokenizer, engine, llm_checkpoint_path
 
     gen_kwargs = {}
     if request.temperature is not None:
@@ -541,6 +544,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
+    # 暂不支持流式输出
     if request.stream:
         if request.functions:
             raise HTTPException(
@@ -552,46 +556,37 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
     if stop_words_ids is not None:
-        # stop_words_ids = [stop_words_ids[0][0], tokenizer.eos_token_id]
         stop_words_logits_processor = StopWordsLogitsProcessor(
             stop_words_ids=stop_words_ids,
-            eos_token_id=model.generation_config.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
         )
         logits_processor = LogitsProcessorList([stop_words_logits_processor])
     else:
-        stop_words_ids = [tokenizer.eos_token_id]
         logits_processor = None
 
     if query is _TEXT_COMPLETION_CMD:
         response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
         messages = history + [{"role": "user", "content": query}]
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+        input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        sampling_params = SamplingParams(
+            **gen_kwargs,
+            max_tokens=512,
+            logits_processors=logits_processor
+            )
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        request_id = f"{timestamp}{random.randint(1,1000)}"
+        result_generator = engine.generate(
+            inputs={"prompt_token_ids": input_ids},
+            sampling_params=sampling_params,
+            request_id=request_id,
+            lora_request=LoRARequest("alice", 1, active_lora_path)
         )
-        model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
-        generated_ids = model.generate(
-            model_inputs.input_ids,
-            attention_mask=model_inputs.attention_mask,
-            pad_token_id=tokenizer.pad_token_id,
-            max_new_tokens=512,
-            # eos_token_id=stop_words_ids,
-            logits_processor=logits_processor,
-            **gen_kwargs
-        )
-        generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-        ]
-        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        # response, _ = model.chat(
-        #     tokenizer,
-        #     query,
-        #     history=history,
-        #     stop_words_ids=stop_words_ids,
-        #     **gen_kwargs
-        # )
+        final_result = None
+        async for result in result_generator:
+            final_result = result
+        response = final_result.outputs[0].text
+
         print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()
 
@@ -646,6 +641,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
 
                 query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
+                # 暂不支持流式输出
                 if request.stream:
                     if request.functions:
                         raise HTTPException(
@@ -657,14 +653,12 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
 
                 stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
                 if stop_words_ids is not None:
-                    # stop_words_ids = [stop_words_ids, tokenizer.eos_token_id]
                     stop_words_logits_processor = StopWordsLogitsProcessor(
                         stop_words_ids=stop_words_ids,
-                        eos_token_id=model.generation_config.eos_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
                     )
                     logits_processor = LogitsProcessorList([stop_words_logits_processor])
                 else:
-                    # stop_words_ids = [tokenizer.eos_token_id]
                     logits_processor = None
 
                 if query is _TEXT_COMPLETION_CMD:
@@ -682,7 +676,6 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                         attention_mask=model_inputs.attention_mask,
                         pad_token_id=tokenizer.pad_token_id,
                         max_new_tokens=512,
-                        # eos_token_id=stop_words_ids,
                         logits_processor=logits_processor,
                         **gen_kwargs
                     )
@@ -690,13 +683,6 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
                     ]
                     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                    # response, _ = model.chat(
-                    #     tokenizer,
-                    #     query,
-                    #     history=history,
-                    #     stop_words_ids=stop_words_ids,
-                    #     **gen_kwargs
-                    # )
                     print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
                 _gc()
 
@@ -726,6 +712,7 @@ def _dump_json(data: BaseModel, *args, **kwargs) -> str:
         return data.json(*args, **kwargs)  # noqa
 
 
+# 暂不支持流式输出
 async def predict(
         query: str, history: List[List[str]], model_id: str, stop_words: List[str], gen_kwargs: Dict,
 ):
@@ -782,7 +769,7 @@ def _get_args():
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen2-7B-Instruct-GPTQ-Int8",
+        default="Qwen/Qwen2-7B-Instruct",
         help="Checkpoint name or path, default to %(default)r",
     )
     parser.add_argument(
@@ -811,10 +798,12 @@ def _get_args():
 if __name__ == "__main__":
     args = _get_args()
 
+    # LLM and Lora path
+    llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct"
+    active_lora_path = "/home/madousama/qlora/Alice5.0_20240613"
+
     tokenizer = AutoTokenizer.from_pretrained(
-        args.checkpoint_path,
-        # trust_remote_code=True,
-        # resume_download=True,
+        llm_checkpoint_path,
     )
 
     if args.api_auth:
@@ -827,25 +816,13 @@ if __name__ == "__main__":
     else:
         device_map = "auto"
 
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     args.checkpoint_path,
-    #     torch_dtype="auto",
-    #     device_map=device_map,
-    #     # trust_remote_code=True,
-    #     # resume_download=True,
-    # ).eval()
-    #
-    # model.generation_config = GenerationConfig.from_pretrained(
-    #     args.checkpoint_path,
-    #     # trust_remote_code=True,
-    #     # resume_download=True,
-    # )
-
-    model = AutoPeftModelForCausalLM.from_pretrained(
-        "F:/GitRepository/Qwen/finetune/output/Alice5.0_20240612_Int8",  # path to the output directory
-        torch_dtype="auto",
-        device_map="auto"
-    ).eval()
+    engine_args = AsyncEngineArgs(
+        model=llm_checkpoint_path,
+        trust_remote_code=True,
+        tensor_parallel_size=1,
+        enable_lora=True
+    )
+    engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     uvicorn.run(app, host=args.server_name, port=args.server_port, workers=1)
 
