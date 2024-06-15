@@ -364,11 +364,11 @@ def parse_messages(messages, embeddings, functions):
 
 def parse_response(response):
     func_name, func_args = "", ""
-    i = response.lfind("Action:")
-    j = response.lfind("\nAction Input:")
+    i = response.find("Action:")
+    j = response.find("\nAction Input:")
     # k = response.rfind("\nObservation:")
     k = response.rfind("\nObserv")
-    t = response.lfind("Thought:")
+    t = response.find("Thought:")
     if 0 <= i < j:  # If the text has `Action` and `Action input`,
         if k < j:  # but does not contain `Observation`,
             # then it is likely that `Observation` is omitted by the LLM,
@@ -380,7 +380,7 @@ def parse_response(response):
         func_args = response[j + len("\nAction Input:"): k].strip()
     if func_name:
 
-        r = response.lfind("Answer:")
+        r = response.find("Answer:")
         if r >= 0:
             thought = response[t + len("Thought:"): r].strip()
             reply = response[r + len("Answer:"): i].strip()
@@ -402,7 +402,7 @@ def parse_response(response):
         )
         return choice_data
     last_t = response.rfind("Thought:")  # Mark the position of the last thought
-    z = response.lfind("\nFinal Answer:")
+    z = response.find("\nFinal Answer:")
     if z >= 0:
         if t >= 0:
             thought = response[t + len("Thought:"): z].strip()
