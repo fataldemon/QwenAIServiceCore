@@ -364,10 +364,11 @@ def parse_messages(messages, embeddings, functions):
 
 def parse_response(response):
     func_name, func_args = "", ""
-    i = response.rfind("Action:")
-    j = response.rfind("\nAction Input:")
+    i = response.lfind("Action:")
+    j = response.lfind("\nAction Input:")
     # k = response.rfind("\nObservation:")
     k = response.rfind("\nObserv")
+    t = response.lfind("Thought:")
     if 0 <= i < j:  # If the text has `Action` and `Action input`,
         if k < j:  # but does not contain `Observation`,
             # then it is likely that `Observation` is omitted by the LLM,
@@ -378,8 +379,8 @@ def parse_response(response):
         func_name = response[i + len("Action:"): j].strip()
         func_args = response[j + len("\nAction Input:"): k].strip()
     if func_name:
-        t = response.rfind("Thought:")
-        r = response.rfind("Answer:")
+
+        r = response.lfind("Answer:")
         if r >= 0:
             thought = response[t + len("Thought:"): r].strip()
             reply = response[r + len("Answer:"): i].strip()
@@ -401,24 +402,23 @@ def parse_response(response):
         )
         return choice_data
     last_t = response.rfind("Thought:")  # Mark the position of the last thought
-    z = response.rfind("\nFinal Answer:")
-    last_thought = ""
+    z = response.lfind("\nFinal Answer:")
     if z >= 0:
-        if last_t >= 0:
-            last_thought = response[last_t + len("Thought:"): z].strip()
+        if t >= 0:
+            thought = response[t + len("Thought:"): z].strip()
         else:
-            last_thought = response[0: z].strip()
+            thought = response[0: z].strip()
         response = response[z + len("\nFinal Answer: "):]
     else:
         z = response.rfind("\nAnswer: ")
-        if last_t >= 0:
-            last_thought = response[last_t + len("Thought:"): z].strip()
+        if t >= 0:
+            thought = response[t + len("Thought:"): z].strip()
         else:
-            last_thought = response[0: z].strip()
+            thought = response[0: z].strip()
         response = response[z + len("\nAnswer: "):]
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        thought=last_thought,
+        thought=thought,
         message=ChatMessage(role="assistant", content=response),
         finish_reason="stop",
     )
