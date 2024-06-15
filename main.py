@@ -829,6 +829,7 @@ if __name__ == "__main__":
     engine_args = AsyncEngineArgs(
         model=llm_checkpoint_path,
         trust_remote_code=True,
+        max_model_len=4096,
         tensor_parallel_size=1,
         enable_lora=True
     )
