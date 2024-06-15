@@ -57,7 +57,7 @@ class StopWordsLogitsProcessor(LogitsProcessor):
         stopped_samples = self._calc_stopped_samples(input_ids)
         for i, should_stop in enumerate(stopped_samples):
             if should_stop:
-                scores[i, self.eos_token_id] = float(2 ** 15)
+                scores[self.eos_token_id] = float(2 ** 15)
         return scores
 
     def _tokens_match(self, prev_tokens: torch.LongTensor, tokens: List[int]) -> bool:
@@ -67,7 +67,7 @@ class StopWordsLogitsProcessor(LogitsProcessor):
         elif len(tokens) > len(prev_tokens):
             # if bad word tokens are longer then prev input_ids they can't be equal
             return False
-        elif prev_tokens[-len(tokens):].tolist() == tokens:
+        elif prev_tokens[-len(tokens):] == tokens:
             # if tokens match
             return True
         else:
@@ -75,13 +75,13 @@ class StopWordsLogitsProcessor(LogitsProcessor):
 
     def _calc_stopped_samples(self, prev_input_ids: Iterable[int]) -> Iterable[int]:
         stopped_samples = []
-        for prev_input_ids_slice in prev_input_ids:
-            match = False
-            for stop_token_seq in self.stop_words_ids:
-                if self._tokens_match(prev_input_ids_slice, stop_token_seq):
-                    # if tokens do not match continue
-                    match = True
-                    break
-            stopped_samples.append(match)
+        # for prev_input_ids_slice in prev_input_ids:
+        match = False
+        for stop_token_seq in self.stop_words_ids:
+            if self._tokens_match(prev_input_ids, stop_token_seq):
+                # if tokens do not match continue
+                match = True
+                break
+        stopped_samples.append(match)
 
         return stopped_samples

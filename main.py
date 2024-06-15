@@ -426,7 +426,7 @@ def parse_response(response):
 
 
 # completion mode, not chat mode
-def text_complete_last_message(history, stop_words_ids, gen_kwargs):
+async def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     im_start = "<|im_start|>"
     im_end = "<|im_end|>"
     prompt = f"{im_start}system\nYou are a helpful assistant.{im_end}"
@@ -438,54 +438,64 @@ def text_complete_last_message(history, stop_words_ids, gen_kwargs):
         elif role == "assistant":
             prompt += f"\n{im_start}assistant\n{content}{im_end}"
     prompt = prompt[: -len(im_end)]
+    model_inputs = tokenizer.encode(prompt)
 
     _stop_words_ids = [tokenizer.encode(im_end)]
     if stop_words_ids:
         for s in stop_words_ids:
             _stop_words_ids.append(s)
     # stop_words_ids = _stop_words_ids
-    model_inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
-    generated_ids = model.generate(
-        model_inputs.input_ids,
-        attention_mask=model_inputs.attention_mask,
-        pad_token_id=tokenizer.pad_token_id,
-        max_new_tokens=512,
-        **gen_kwargs
+    if _stop_words_ids is not None:
+        stop_words_logits_processor = StopWordsLogitsProcessor(
+            stop_words_ids=_stop_words_ids,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+        logits_processor = LogitsProcessorList([stop_words_logits_processor])
+    else:
+        logits_processor = None
+
+    sampling_params = SamplingParams(
+        **gen_kwargs,
+        max_tokens=512,
+        logits_processors=logits_processor
     )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-    output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    # input_ids = torch.tensor([tokenizer.encode(prompt)]).to(model.device)
-    # output = model.generate(input_ids=input_ids, stop_words_ids=stop_words_ids, **gen_kwargs).tolist()[0]
-    # output = tokenizer.decode(output, errors="ignore")
-    # output = trim_stop_words(output, ["<|endoftext|>", im_end])
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    request_id = f"{timestamp}{random.randint(1, 1000)}"
+    result_generator = engine.generate(
+        inputs={"prompt_token_ids": model_inputs},
+        sampling_params=sampling_params,
+        request_id=request_id,
+        lora_request=LoRARequest("alice", 1, active_lora_path)
+    )
+    final_result = None
+    async for result in result_generator:
+        final_result = result
+    output = final_result.outputs[0].text
+
     print(f"<completion>\n{prompt}\n<!-- *** -->\n{output}\n</completion>")
     return output
 
 
 # 在剥离Lora的情况下进行推理（Qwen2原生）
-def original_completion(message: list, gen_kwargs) -> str:
-
-    with model.disable_adapter():
-        text = tokenizer.apply_chat_template(
-            message,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
-        generated_ids = model.generate(
-            model_inputs.input_ids,
-            attention_mask=model_inputs.attention_mask,
-            pad_token_id=tokenizer.pad_token_id,
-            max_new_tokens=512,
-            **gen_kwargs
-        )
-        generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-        ]
-        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        return response
+async def original_completion(message: list, gen_kwargs) -> str:
+    input_ids = tokenizer.apply_chat_template(message, tokenize=True, add_generation_prompt=True)
+    sampling_params = SamplingParams(
+        **gen_kwargs,
+        max_tokens=512,
+        stop_token_ids=[tokenizer.eos_token_id]
+    )
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    request_id = f"{timestamp}{random.randint(1, 1000)}"
+    result_generator = engine.generate(
+        inputs={"prompt_token_ids": input_ids},
+        sampling_params=sampling_params,
+        request_id=request_id
+    )
+    final_result = None
+    async for result in result_generator:
+        final_result = result
+    response = final_result.outputs[0].text
+    return response
 
 
 @app.post("/v1/assistant/completions", response_model=ChatCompletionResponse)
@@ -507,7 +517,7 @@ async def completion_without_lora(request: ChatCompletionRequest):
     message = request.messages
     print(f"{message}")
     # 调用无Lora的大模型
-    response = original_completion(message, gen_kwargs=gen_kwargs)
+    response = await original_completion(message, gen_kwargs=gen_kwargs)
     print(f"Assistant:{response}")
     choice_data = ChatCompletionResponseChoice(
         index=0,
@@ -541,6 +551,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
         stop_words = stop_words or []
         if "Observation:" not in stop_words:
             stop_words.append("Observation:")
+        if "Thought: " not in stop_words:
+            stop_words.append("Thought: ")
 
     query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
@@ -565,7 +577,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         logits_processor = None
 
     if query is _TEXT_COMPLETION_CMD:
-        response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
+        response = await text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
         messages = history + [{"role": "user", "content": query}]
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
@@ -665,24 +677,24 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                     response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
                 else:
                     messages = history + [{"role": "user", "content": query}]
-                    text = tokenizer.apply_chat_template(
-                        messages,
-                        tokenize=False,
-                        add_generation_prompt=True
+                    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+                    sampling_params = SamplingParams(
+                        **gen_kwargs,
+                        max_tokens=512,
+                        logits_processors=logits_processor
                     )
-                    model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
-                    generated_ids = model.generate(
-                        model_inputs.input_ids,
-                        attention_mask=model_inputs.attention_mask,
-                        pad_token_id=tokenizer.pad_token_id,
-                        max_new_tokens=512,
-                        logits_processor=logits_processor,
-                        **gen_kwargs
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                    request_id = f"{timestamp}{random.randint(1, 1000)}"
+                    result_generator = engine.generate(
+                        inputs={"prompt_token_ids": input_ids},
+                        sampling_params=sampling_params,
+                        request_id=request_id,
+                        lora_request=LoRARequest("alice", 1, active_lora_path)
                     )
-                    generated_ids = [
-                        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                    ]
-                    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                    final_result = None
+                    async for result in result_generator:
+                        final_result = result
+                    response = final_result.outputs[0].text
                     print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
                 _gc()
 
