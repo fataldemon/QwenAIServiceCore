@@ -366,18 +366,18 @@ def parse_response(response):
     func_name, func_args = "", ""
     i = response.find("Action:")
     j = response.find("\nAction Input:")
-    # k = response.rfind("\nObservation:")
-    k = response.rfind("\nObserv")
+    k = response.rfind("\nObservation:")
+    # k = response.rfind("\nObserv")
     t = response.find("Thought:")
     if 0 <= i < j:  # If the text has `Action` and `Action input`,
         if k < j:  # but does not contain `Observation`,
             # then it is likely that `Observation` is omitted by the LLM,
             # because the output text may have discarded the stop word.
             response = response.rstrip() + "\nObservation:"  # Add it back.
-        # k = response.rfind("\nObservation:")
-        k = response.rfind("\nObserv")
+            # End of Action Input, sometimes not connect with Observation
+        kk = j + len("\nAction Input:") + response[j + len("\nAction Input:"):].find("\n")
         func_name = response[i + len("Action:"): j].strip()
-        func_args = response[j + len("\nAction Input:"): k].strip()
+        func_args = response[j + len("\nAction Input:"): kk].strip()
     if func_name:
 
         r = response.find("Answer:")
@@ -416,6 +416,10 @@ def parse_response(response):
         else:
             thought = response[0: z].strip()
         response = response[z + len("\nAnswer: "):]
+    # in case for multiple Thought
+    response = response.replace("\nThought:", "")
+    # if Answer still include Observation
+    response = response.replace("\nObservation:", "")
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought=thought,
@@ -551,6 +555,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
         stop_words = stop_words or []
         if "Observation:" not in stop_words:
             stop_words.append("Observation:")
+        if "\nThought:" not in stop_words:
+            stop_words.append("\nThought:")
 
     query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
@@ -648,6 +654,8 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeå–å
                     stop_words = stop_words or []
                     if "Observation:" not in stop_words:
                         stop_words.append("Observation:")
+                    if "\nThought:" not in stop_words:
+                        stop_words.append("\nThought:")
 
                 query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
@@ -829,7 +837,7 @@ if __name__ == "__main__":
     engine_args = AsyncEngineArgs(
         model=llm_checkpoint_path,
         trust_remote_code=True,
-        max_model_len=4096,
+        max_model_len=2048,
         tensor_parallel_size=1,
         enable_lora=True
     )
