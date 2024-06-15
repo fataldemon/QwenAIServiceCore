@@ -551,8 +551,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
         stop_words = stop_words or []
         if "Observation:" not in stop_words:
             stop_words.append("Observation:")
-        if "Thought: " not in stop_words:
-            stop_words.append("Thought: ")
 
     query, history = parse_messages(request.messages, request.embeddings, request.functions)
 
