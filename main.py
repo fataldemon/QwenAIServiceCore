@@ -585,6 +585,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     else:
         messages = history + [{"role": "user", "content": query}]
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        print(f"Input token numbers: {len(input_ids)}")
         sampling_params = SamplingParams(
             **gen_kwargs,
             max_tokens=512,
@@ -684,6 +685,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
                 else:
                     messages = history + [{"role": "user", "content": query}]
                     input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+                    print(f"Input token numbers: {len(input_ids)}")
                     sampling_params = SamplingParams(
                         **gen_kwargs,
                         max_tokens=512,
@@ -837,7 +839,7 @@ if __name__ == "__main__":
     engine_args = AsyncEngineArgs(
         model=llm_checkpoint_path,
         trust_remote_code=True,
-        max_model_len=2048,
+        max_model_len=3072,
         tensor_parallel_size=1,
         enable_lora=True
     )
