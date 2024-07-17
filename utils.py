@@ -1,8 +1,39 @@
 from typing import List, Iterable
 import torch
 import numpy as np
+import re
 
 from transformers.generation import LogitsProcessor
+
+
+def remove_emotion(message: str) -> tuple[str, str]:
+    """
+    去除（提取）括号里的表情部分
+    :param line:
+    :return:
+    """
+    pattern = r'\【[^\】^\]]*[\]\】]'
+    match = re.findall(pattern, message)
+    if not len(match) == 0:
+        return message.replace(match[0], ""), match[0]
+    else:
+        return message, "【】"
+
+
+def remove_action(line: str) -> tuple[str, list[str]]:
+    """
+    去除（提取）括号里描述动作的部分
+    :param line:
+    :return:
+    """
+    pattern = r'\（[^\（^\）]*\）'
+    match = re.findall(pattern, line)
+    if len(match) == 0:
+        return line, []
+    else:
+        for i in range(len(match)):
+            line = line.replace(match[i], "")
+        return line, match
 
 
 class StopWordsLogitsProcessor(LogitsProcessor):
