@@ -119,7 +119,7 @@ def vector_search(question: str, top_k: int, character: str, subject: str) -> tu
         result.append(materials[result_index_list[k]].strip())
     print(f"IndexList={result_index_list[:top_k]}.  {log_info}  ")
     # print("搜索结果为：", result)  # 抛弃最后一个换行符
-    return result, result_index_list[:top_k]  # 返回队首top_k个元素
+    return result, result_index_list[:top_k][::-1]  # 返回队首top_k个元素，倒序输出（最后一个是相关度最高的）
 
 
 def find_material_by_index(index_list: list[int], character: str, subject: str) -> list[str]:

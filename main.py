@@ -341,7 +341,7 @@ def parse_messages(character, messages, on_embedding, functions, information, em
             subject="setting",
             client_information=information,
             client_buffer=embeddings_buffer,
-            max_length=6
+            max_length=7
         )
     else:
         embeddings = information
@@ -427,7 +427,15 @@ def parse_response(response):
             thought = response[t + len("Thought:"): z].strip()
         else:
             thought = response[0: z].strip()
-        response = response[z + len("\nFinal Answer: "):]
+        a = response.rfind("\nAnswer: ")
+        if 0 <= a < z:
+            answer = response[a + len("\nAnswer: "): z]
+            n = answer.find("\n")
+            answer = answer[:n]
+            response = answer + response[z + len("\nFinal Answer: "):]
+        else:
+            response = response[z + len("\nFinal Answer: "):]
+
     else:
         z = response.rfind("\nAnswer: ")
         if t >= 0:
@@ -658,7 +666,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         character=request.character,
         subject="setting"
     )
-    embedding_list = reorganize_index(embedding_list, result_list, 6)
+    embedding_list = reorganize_index(embedding_list, result_list, 7)
     choice_data.embedding_list = embedding_list
 
     # 向websocket连接广播数据
@@ -780,7 +788,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                         character=request.character,
                         subject="setting"
                     )
-                    embedding_list = reorganize_index(embedding_list, result_list, 6)
+                    embedding_list = reorganize_index(embedding_list, result_list, 7)
                     choice_data.embedding_list = embedding_list
 
                 await websocket_manager.send_message_to_client(choice_data.json(), websocket)
@@ -887,7 +895,7 @@ if __name__ == "__main__":
     # LLM and Lora path
     llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct"
     # active_lora_path = "/home/madousama/qlora/Alice5.0_20240607"
-    active_lora_path = "/home/madousama/qlora/Alice5.0_20240716"
+    active_lora_path = "/home/madousama/qlora/Alice5.0_20240718"
 
     tokenizer = AutoTokenizer.from_pretrained(
         llm_checkpoint_path,
