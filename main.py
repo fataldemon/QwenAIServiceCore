@@ -895,7 +895,8 @@ if __name__ == "__main__":
     # LLM and Lora path
     llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct"
     # active_lora_path = "/home/madousama/qlora/Alice5.0_20240607"
-    active_lora_path = "/home/madousama/qlora/Alice5.0_20240718"
+    # active_lora_path = "/home/madousama/qlora/Alice5.0_20240618"
+    active_lora_path = "/home/madousama/qlora/Alice5.0_20240719"
 
     tokenizer = AutoTokenizer.from_pretrained(
         llm_checkpoint_path,
