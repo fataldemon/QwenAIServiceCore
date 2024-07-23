@@ -767,29 +767,30 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
 
                 if request.functions:
                     choice_data = parse_response(response)
+                    choice_data.index = 1  # index=1作为websocket渠道返回的标志
                 else:
                     choice_data = ChatCompletionResponseChoice(
-                        index=0,
+                        index=1,
                         thought="",
                         message=ChatMessage(role="assistant", content=response),
                         finish_reason="stop",
                     )
 
-                    # Embedding Process For Answer
-                    # emotion processing
-                    content, emotion = remove_emotion(choice_data.message.content)
-                    emotion_checked = check_emotion(emotion, request.character)
-                    choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
-                    # action processing
-                    content, actions = remove_action(content)
-                    result, result_list = vector_search(
-                        content,
-                        3,
-                        character=request.character,
-                        subject="setting"
-                    )
-                    embedding_list = reorganize_index(embedding_list, result_list, 7)
-                    choice_data.embedding_list = embedding_list
+                # Embedding Process For Answer
+                # emotion processing
+                content, emotion = remove_emotion(choice_data.message.content)
+                emotion_checked = check_emotion(emotion, request.character)
+                choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
+                # action processing
+                content, actions = remove_action(content)
+                result, result_list = vector_search(
+                    content,
+                    3,
+                    character=request.character,
+                    subject="setting"
+                )
+                embedding_list = reorganize_index(embedding_list, result_list, 7)
+                choice_data.embedding_list = embedding_list
 
                 await websocket_manager.send_message_to_client(choice_data.json(), websocket)
                 print(f"Message sent: {response}")
@@ -894,9 +895,10 @@ if __name__ == "__main__":
 
     # LLM and Lora path
     llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct"
+    # llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct-GPTQ-Int8"
     # active_lora_path = "/home/madousama/qlora/Alice5.0_20240607"
-    # active_lora_path = "/home/madousama/qlora/Alice5.0_20240618"
     active_lora_path = "/home/madousama/qlora/Alice5.0_20240719"
+    # active_lora_path = "/home/madousama/qlora/Alice5.0_20240719_Int8"
 
     tokenizer = AutoTokenizer.from_pretrained(
         llm_checkpoint_path,

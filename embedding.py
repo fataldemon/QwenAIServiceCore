@@ -10,6 +10,7 @@ model = SentenceTransformer('DMetaSoul/Dmeta-embedding', device='cpu')
 # character表示对应角色 subject表示主题：["setting", "expression", "behaviour", "memory"]
 DOC_FOLDER = """embedding/{character}/{subject}/"""
 VECTOR_FOLDER = """embedding/{character}/{subject}/vector/"""
+IDENTITY_FILE = """embedding/{character}/identity.mem"""
 
 
 def read_as_content(file_name: str, doc_folder: str) -> str:
@@ -91,8 +92,20 @@ def generate_vector(character: str, subject: str):
     return "success"
 
 
+def get_identity(character: str) -> list:
+    identity_file = IDENTITY_FILE.format(character=character)
+    with open(identity_file, 'r', encoding="utf-8") as f:
+        file_content = f.read()
+    identities = file_content.split("\n")
+    print(identities)
+    return identities
+
+
 def vector_search(question: str, top_k: int, character: str, subject: str) -> tuple[list[str], list[int]]:
     vector_folder = VECTOR_FOLDER.format(character=character, subject=subject)
+    if subject == "setting":
+        for identity in get_identity(character):
+            question = question.replace(identity, "你")
     with open(vector_folder + 'materials.pkl', 'rb') as f:
         materials = pickle.load(f)
     with open(vector_folder + 'tags_map.pkl', 'rb') as f:
