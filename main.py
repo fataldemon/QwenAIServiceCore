@@ -669,6 +669,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
         embedding_list = reorganize_index(embedding_list, result_list, 7)
         choice_data.embedding_list = embedding_list
+    else:
+        choice_data.embedding_list = []
 
     # 向websocket连接广播数据
     await websocket_manager.broadcast(choice_data.json())
@@ -793,6 +795,8 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                     )
                     embedding_list = reorganize_index(embedding_list, result_list, 7)
                     choice_data.embedding_list = embedding_list
+                else:
+                    choice_data.embedding_list = []
 
                 await websocket_manager.send_message_to_client(choice_data.json(), websocket)
                 print(f"Message sent: {response}")
