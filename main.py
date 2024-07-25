@@ -654,20 +654,21 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
     # Embedding Process For Answer
-    # emotion processing
-    content, emotion = remove_emotion(choice_data.message.content)
-    emotion_checked = check_emotion(emotion, request.character)
-    choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
-    # action processing
-    content, actions = remove_action(content)
-    result, result_list = vector_search(
-        content,
-        3,
-        character=request.character,
-        subject="setting"
-    )
-    embedding_list = reorganize_index(embedding_list, result_list, 7)
-    choice_data.embedding_list = embedding_list
+    if request.on_embedding:
+        # emotion processing
+        content, emotion = remove_emotion(choice_data.message.content)
+        emotion_checked = check_emotion(emotion, request.character)
+        choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
+        # action processing
+        content, actions = remove_action(content)
+        result, result_list = vector_search(
+            content,
+            3,
+            character=request.character,
+            subject="setting"
+        )
+        embedding_list = reorganize_index(embedding_list, result_list, 7)
+        choice_data.embedding_list = embedding_list
 
     # 向websocket连接广播数据
     await websocket_manager.broadcast(choice_data.json())
@@ -777,20 +778,21 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                     )
 
                 # Embedding Process For Answer
-                # emotion processing
-                content, emotion = remove_emotion(choice_data.message.content)
-                emotion_checked = check_emotion(emotion, request.character)
-                choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
-                # action processing
-                content, actions = remove_action(content)
-                result, result_list = vector_search(
-                    content,
-                    3,
-                    character=request.character,
-                    subject="setting"
-                )
-                embedding_list = reorganize_index(embedding_list, result_list, 7)
-                choice_data.embedding_list = embedding_list
+                if request.on_embedding:
+                    # emotion processing
+                    content, emotion = remove_emotion(choice_data.message.content)
+                    emotion_checked = check_emotion(emotion, request.character)
+                    choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
+                    # action processing
+                    content, actions = remove_action(content)
+                    result, result_list = vector_search(
+                        content,
+                        3,
+                        character=request.character,
+                        subject="setting"
+                    )
+                    embedding_list = reorganize_index(embedding_list, result_list, 7)
+                    choice_data.embedding_list = embedding_list
 
                 await websocket_manager.send_message_to_client(choice_data.json(), websocket)
                 print(f"Message sent: {response}")
