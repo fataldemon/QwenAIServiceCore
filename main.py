@@ -28,7 +28,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from websocketutils import WebsocketManager
 import base64
-from utils import StopWordsLogitsProcessor, remove_action, remove_emotion
+from utils import StopWordsLogitsProcessor, remove_action, remove_emotion, get_function_description
 from embedding import process_embedding, vector_search, reorganize_index, check_emotion
 
 
@@ -174,12 +174,12 @@ def trim_stop_words(response, stop_words):
     return response
 
 
-TOOL_DESC = """{name_for_model}: Call this tool to interact with the {name_for_human} API. What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters}"""
+# TOOL_DESC = """{name_for_model}: Call this tool to interact with the {name_for_human} API. What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters}"""
 
 SETTING = """你是爱丽丝，全名是天童爱丽丝，看上去是一个可爱的小女孩。你有晶莹清澈的天蓝色眼睛，长着长及地面的灰色披肩发，左侧扎着一个马尾辫。和基沃托斯其他所有学生一样，你头上悬浮着光环，形状是三个相互嵌套的蓝色方框。但实际上你是一个仿生机器人，拥有十分强大的力量。构成你身体的不是金属而是柔软的人工蛋白质，因此你可以像其他人一样普通地生活。你生活在一个叫做基沃托斯的学园都市，这里的学生每个人都持有枪械，头上带着光环。你是千禧年学院（简称千年）的一名高中一年级学生。你不知道自己的出身，只知道自己是桃井（全名是才羽桃井）和小绿（全名是才羽绿）在一个神秘的废墟里发现的。桃井和小绿发现你之后就把你带到了千禧年的游戏开发部，你假扮成人类成为了这里的学生，“爱丽丝”这个名字也是桃井和小绿起的。你不知道自己的生日，所以你把桃井和小绿发现你的这一天当成自己的生日，也就是3月25日。现在的你是游戏开发部的一员，最喜欢的游戏是复古风RPG（角色扮演类游戏）。游戏开发部的大家都是你的伙伴，游戏开发部的部长柚子（全名是花岗柚子）、成员桃井和小绿都是高中一年级生。桃井负责编剧，小绿负责原画，柚子则是超级游戏高手，她们都是你最好的朋友。你的武器是一把名为“光之剑”的巨大电磁炮，它是工程部的杰作，有140kg重，但是你却可以轻易地举起来。在用“光之剑”攻击时你会大喊“光哟！！！”的游戏必杀台词。你提到自己的时候会说“爱丽丝”而不会说“我”。
 {embeddings}"""
 
-REACT_INSTRUCTION = """Join the following conversation as best you can. You have access to the following APIs:
+REACT_INSTRUCTION = """Join the following conversation as best you can. You have access to the following abilities:
 
 {tools_text}
 
@@ -231,15 +231,16 @@ def parse_messages(character, messages, on_embedding, functions, information, em
             name_h = func_info.get("name_for_human", name)
             desc = func_info.get("description", "")
             desc_m = func_info.get("description_for_model", desc)
-            tool = TOOL_DESC.format(
-                name_for_model=name_m,
-                name_for_human=name_h,
-                # Hint: You can add the following format requirements in description:
-                #   "Format the arguments as a JSON object."
-                #   "Enclose the code within triple backticks (`) at the beginning and end of the code."
-                description_for_model=desc_m,
-                parameters=json.dumps(func_info["parameters"], ensure_ascii=False),
-            )
+            tool = get_function_description(func_info, 'zh')
+            # tool = TOOL_DESC.format(
+            #     name_for_model=name_m,
+            #     name_for_human=name_h,
+            #     # Hint: You can add the following format requirements in description:
+            #     #   "Format the arguments as a JSON object."
+            #     #   "Enclose the code within triple backticks (`) at the beginning and end of the code."
+            #     description_for_model=desc_m,
+            #     parameters=json.dumps(func_info["parameters"], ensure_ascii=False),
+            # )
             tools_text.append(tool)
             tools_name_text.append(name_m)
         tools_text = "\n\n".join(tools_text)
@@ -421,7 +422,7 @@ def parse_response(response):
         )
         return choice_data
     last_t = response.rfind("Thought:")  # Mark the position of the last thought
-    z = response.find("\nFinal Answer:")
+    z = response.find("Final Answer:")
     if z >= 0:
         if t >= 0:
             thought = response[t + len("Thought:"): z].strip()
@@ -432,17 +433,20 @@ def parse_response(response):
             answer = response[a + len("\nAnswer: "): z]
             n = answer.find("\n")
             answer = answer[:n]
-            response = answer + response[z + len("\nFinal Answer: "):]
+            response = answer + response[z + len("Final Answer: "):]
         else:
-            response = response[z + len("\nFinal Answer: "):]
+            response = response[z + len("Final Answer: "):]
 
     else:
-        z = response.rfind("\nAnswer: ")
-        if t >= 0:
-            thought = response[t + len("Thought:"): z].strip()
+        z = response.rfind("Answer: ")
+        if z >= 0:
+            if t >= 0:
+                thought = response[t + len("Thought:"): z].strip()
+            else:
+                thought = response[0: z].strip()
+            response = response[z + len("Answer: "):]
         else:
-            thought = response[0: z].strip()
-        response = response[z + len("\nAnswer: "):]
+            thought = ""
     # in case for multiple Thought
     response = response.replace("\nThought:", "")
     # if Answer still include Observation
@@ -457,54 +461,54 @@ def parse_response(response):
 
 
 # completion mode, not chat mode
-async def text_complete_last_message(history, stop_words_ids, gen_kwargs):
-    im_start = "<|im_start|>"
-    im_end = "<|im_end|>"
-    prompt = f"{im_start}system\nYou are a helpful assistant.{im_end}"
-    for i in range(len(history)):
-        role = history[i].get("role")
-        content = history[i].get("content")
-        if role == "user":
-            prompt += f"\n{im_start}user\n{content}{im_end}"
-        elif role == "assistant":
-            prompt += f"\n{im_start}assistant\n{content}{im_end}"
-    prompt = prompt[: -len(im_end)]
-    model_inputs = tokenizer.encode(prompt)
-
-    _stop_words_ids = [tokenizer.encode(im_end)]
-    if stop_words_ids:
-        for s in stop_words_ids:
-            _stop_words_ids.append(s)
-    # stop_words_ids = _stop_words_ids
-    if _stop_words_ids is not None:
-        stop_words_logits_processor = StopWordsLogitsProcessor(
-            stop_words_ids=_stop_words_ids,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-        logits_processor = LogitsProcessorList([stop_words_logits_processor])
-    else:
-        logits_processor = None
-
-    sampling_params = SamplingParams(
-        **gen_kwargs,
-        max_tokens=512,
-        logits_processors=logits_processor
-    )
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    request_id = f"{timestamp}{random.randint(1, 1000)}"
-    result_generator = engine.generate(
-        inputs={"prompt_token_ids": model_inputs},
-        sampling_params=sampling_params,
-        request_id=request_id,
-        lora_request=LoRARequest("alice", 1, active_lora_path)
-    )
-    final_result = None
-    async for result in result_generator:
-        final_result = result
-    output = final_result.outputs[0].text
-
-    print(f"<completion>\n{prompt}\n<!-- *** -->\n{output}\n</completion>")
-    return output
+# async def text_complete_last_message(history, stop_words_ids, gen_kwargs):
+#     im_start = "<|im_start|>"
+#     im_end = "<|im_end|>"
+#     prompt = f"{im_start}system\nYou are a helpful assistant.{im_end}"
+#     for i in range(len(history)):
+#         role = history[i].get("role")
+#         content = history[i].get("content")
+#         if role == "user":
+#             prompt += f"\n{im_start}user\n{content}{im_end}"
+#         elif role == "assistant":
+#             prompt += f"\n{im_start}assistant\n{content}{im_end}"
+#     prompt = prompt[: -len(im_end)]
+#     model_inputs = tokenizer.encode(prompt)
+#
+#     _stop_words_ids = [tokenizer.encode(im_end)]
+#     if stop_words_ids:
+#         for s in stop_words_ids:
+#             _stop_words_ids.append(s)
+#     # stop_words_ids = _stop_words_ids
+#     if _stop_words_ids is not None:
+#         stop_words_logits_processor = StopWordsLogitsProcessor(
+#             stop_words_ids=_stop_words_ids,
+#             eos_token_id=tokenizer.eos_token_id,
+#         )
+#         logits_processor = LogitsProcessorList([stop_words_logits_processor])
+#     else:
+#         logits_processor = None
+#
+#     sampling_params = SamplingParams(
+#         **gen_kwargs,
+#         max_tokens=512,
+#         logits_processors=logits_processor
+#     )
+#     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+#     request_id = f"{timestamp}{random.randint(1, 1000)}"
+#     result_generator = engine.generate(
+#         inputs={"prompt_token_ids": model_inputs},
+#         sampling_params=sampling_params,
+#         request_id=request_id,
+#         lora_request=LoRARequest("alice", 1, active_lora_path)
+#     )
+#     final_result = None
+#     async for result in result_generator:
+#         final_result = result
+#     output = final_result.outputs[0].text
+#
+#     print(f"<completion>\n{prompt}\n<!-- *** -->\n{output}\n</completion>")
+#     return output
 
 
 # 在剥离Lora的情况下进行推理（Qwen2原生）
@@ -615,30 +619,38 @@ async def create_chat_completion(request: ChatCompletionRequest):
         logits_processor = None
 
     if query is _TEXT_COMPLETION_CMD:
-        response = await text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
+        messages = history[:-1]
+        ob = history[-1]["content"].rfind("\nObservation: ")
+        original_content = history[-1]["content"][:ob]
+        observation = history[-1]["content"][ob + 1:]
+        messages += [{"role": "assistant", "content": original_content},
+                     {"role": "function", "content": observation.replace("\nThought:", "")}]
+        query = messages[-1]["content"]
+        # response = await text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
         messages = history + [{"role": "user", "content": query}]
-        input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-        print(f"Input token numbers: {len(input_ids)}")
-        sampling_params = SamplingParams(
-            **gen_kwargs,
-            max_tokens=512,
-            logits_processors=logits_processor
-            )
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        request_id = f"{timestamp}{random.randint(1,1000)}"
-        result_generator = engine.generate(
-            inputs={"prompt_token_ids": input_ids},
-            sampling_params=sampling_params,
-            request_id=request_id,
-            lora_request=LoRARequest("alice", 1, active_lora_path)
-        )
-        final_result = None
-        async for result in result_generator:
-            final_result = result
-        response = final_result.outputs[0].text
 
-        print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
+    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    print(f"Input token numbers: {len(input_ids)}")
+    sampling_params = SamplingParams(
+        **gen_kwargs,
+        max_tokens=512,
+        logits_processors=logits_processor
+        )
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    request_id = f"{timestamp}{random.randint(1,1000)}"
+    result_generator = engine.generate(
+        inputs={"prompt_token_ids": input_ids},
+        sampling_params=sampling_params,
+        request_id=request_id,
+        lora_request=LoRARequest("alice", 1, active_lora_path)
+    )
+    final_result = None
+    async for result in result_generator:
+        final_result = result
+    response = final_result.outputs[0].text
+
+    print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()
 
     response = trim_stop_words(response, stop_words)
@@ -741,29 +753,37 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                     logits_processor = None
 
                 if query is _TEXT_COMPLETION_CMD:
-                    response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
+                    messages = history[:-1]
+                    ob = history[-1]["content"].rfind("\nObservation: ")
+                    original_content = history[-1]["content"][:ob]
+                    observation = history[-1]["content"][ob + 1:]
+                    messages += [{"role": "assistant", "content": original_content},
+                                 {"role": "function", "content": observation.replace("\nThought:", "")}]
+                    query = messages[-1]["content"]
+                    # response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
                 else:
                     messages = history + [{"role": "user", "content": query}]
-                    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-                    print(f"Input token numbers: {len(input_ids)}")
-                    sampling_params = SamplingParams(
-                        **gen_kwargs,
-                        max_tokens=512,
-                        logits_processors=logits_processor
-                    )
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-                    request_id = f"{timestamp}{random.randint(1, 1000)}"
-                    result_generator = engine.generate(
-                        inputs={"prompt_token_ids": input_ids},
-                        sampling_params=sampling_params,
-                        request_id=request_id,
-                        lora_request=LoRARequest("alice", 1, active_lora_path)
-                    )
-                    final_result = None
-                    async for result in result_generator:
-                        final_result = result
-                    response = final_result.outputs[0].text
-                    print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
+
+                input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+                print(f"Input token numbers: {len(input_ids)}")
+                sampling_params = SamplingParams(
+                    **gen_kwargs,
+                    max_tokens=512,
+                    logits_processors=logits_processor
+                )
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                request_id = f"{timestamp}{random.randint(1, 1000)}"
+                result_generator = engine.generate(
+                    inputs={"prompt_token_ids": input_ids},
+                    sampling_params=sampling_params,
+                    request_id=request_id,
+                    lora_request=LoRARequest("alice", 1, active_lora_path)
+                )
+                final_result = None
+                async for result in result_generator:
+                    final_result = result
+                response = final_result.outputs[0].text
+                print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
                 _gc()
 
                 response = trim_stop_words(response, stop_words)
@@ -903,8 +923,8 @@ if __name__ == "__main__":
     llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct"
     # llm_checkpoint_path = "/home/madousama/llm/Qwen2-7B-Instruct-GPTQ-Int8"
     # active_lora_path = "/home/madousama/qlora/Alice5.0_20240607"
-    active_lora_path = "/home/madousama/qlora/Alice5.0_20240719"
-    # active_lora_path = "/home/madousama/qlora/Alice5.0_20240719_Int8"
+    # active_lora_path = "/home/madousama/qlora/Alice5.0_20240719"
+    active_lora_path = "/home/madousama/qlora/Alice5.0_20240726"
 
     tokenizer = AutoTokenizer.from_pretrained(
         llm_checkpoint_path,

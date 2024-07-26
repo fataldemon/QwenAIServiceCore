@@ -1,7 +1,7 @@
-from typing import List, Iterable
+from typing import List, Iterable, Dict, Literal
 import torch
 import numpy as np
-import re
+import re, json
 
 from transformers.generation import LogitsProcessor
 
@@ -116,3 +116,36 @@ class StopWordsLogitsProcessor(LogitsProcessor):
         stopped_samples.append(match)
 
         return stopped_samples
+
+
+def get_function_description(function: Dict, lang: Literal['en', 'zh']) -> str:
+    """
+    Text description of function
+    """
+    tool_desc_template = {
+        'zh': '### {name_for_human}\n\n{name_for_model}: {description_for_model} 输入参数：{parameters} {args_format}',
+        'en': '### {name_for_human}\n\n{name_for_model}: {description_for_model} Parameters: {parameters} {args_format}'
+    }
+    tool_desc = tool_desc_template[lang]
+    name = function.get('name', None)
+    name_for_human = function.get('name_for_human', name)
+    name_for_model = function.get('name_for_model', name)
+    assert name_for_human and name_for_model
+
+    if name_for_model == 'code_interpreter':
+        args_format = {
+            'zh': '此工具的输入应为Markdown代码块。',
+            'en': 'Enclose the code within triple backticks (`) at the beginning and end of the code.',
+        }
+    else:
+        args_format = {
+            'zh': '此工具的输入应为JSON对象。',
+            'en': 'Format the arguments as a JSON object.',
+        }
+    args_format = function.get('args_format', args_format[lang])
+
+    return tool_desc.format(name_for_human=name_for_human,
+                            name_for_model=name_for_model,
+                            description_for_model=function['description'],
+                            parameters=json.dumps(function['parameters'], ensure_ascii=False),
+                            args_format=args_format).rstrip()
