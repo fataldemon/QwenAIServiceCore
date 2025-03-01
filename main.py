@@ -2,34 +2,35 @@
 # Implements API for Qwen-7B in OpenAI's format. (https://platform.openai.com/docs/api-reference/chat)
 # Usage: python openai_api.py
 # Visit http://localhost:8000/docs for documents.
-import random
-import re, datetime
+import base64
 import copy
-import json
-import time
+import datetime
+import random
+import re
 from argparse import ArgumentParser
 from contextlib import asynccontextmanager
-from typing import Dict, List, Literal, Optional, Union
-from transformers.generation.logits_process import LogitsProcessorList
-from vllm import LLM, SamplingParams, AsyncEngineArgs, AsyncLLMEngine, TokensPrompt
-from vllm.lora.request import LoRARequest
 
 # from peft import AutoPeftModelForCausalLM
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, ValidationError
 from sse_starlette.sse import EventSourceResponse
-from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria
-from transformers.generation import GenerationConfig
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from websocketutils import WebsocketManager
-import base64
-from utils import StopWordsLogitsProcessor, remove_action, remove_emotion, get_function_description
+from transformers import AutoTokenizer
+from transformers.generation.logits_process import LogitsProcessorList
+from vllm import SamplingParams, AsyncEngineArgs, AsyncLLMEngine, TokensPrompt
+from vllm.lora.request import LoRARequest
+from models.base import (ModelCard, ModelList, ChatMessage, DeltaMessage, ChatCompletionRequest,
+                         ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice, ChatCompletionResponse)
+from llm.local_llm import vllm_start_engine
+from pydantic import ValidationError
+
 from embedding import process_embedding, vector_search, reorganize_index, check_emotion
+from utils import StopWordsLogitsProcessor, remove_action, remove_emotion, get_function_description
+from websocketutils import WebsocketManager
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -80,70 +81,7 @@ app.add_middleware(
 )
 
 
-class ModelCard(BaseModel):
-    id: str
-    object: str = "model"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "owner"
-    root: Optional[str] = None
-    parent: Optional[str] = None
-    permission: Optional[list] = None
 
-
-class ModelList(BaseModel):
-    object: str = "list"
-    data: List[ModelCard] = []
-
-
-class ChatMessage(BaseModel):
-    role: Literal["user", "assistant", "system", "function"]
-    content: Optional[str]
-    function_call: Optional[Dict] = None
-
-
-class DeltaMessage(BaseModel):
-    role: Optional[Literal["user", "assistant", "system"]] = None
-    content: Optional[str] = None
-
-
-class ChatCompletionRequest(BaseModel):
-    model: str
-    messages: List[ChatMessage]
-    information: Optional[str] = ""
-    functions: Optional[List[Dict]] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    repetition_penalty: Optional[float] = None
-    max_length: Optional[int] = None
-    stream: Optional[bool] = False
-    stop: Optional[List[str]] = None
-    embeddings_buffer: Optional[List[int]] = []
-    on_embedding: Optional[bool] = True
-    character: Optional[str] = "tendou_arisu"
-
-
-class ChatCompletionResponseChoice(BaseModel):
-    index: int
-    thought: Optional[str]
-    embedding_list: Optional[List[int]] = []
-    message: ChatMessage
-    finish_reason: Literal["stop", "length", "function_call"]
-
-
-class ChatCompletionResponseStreamChoice(BaseModel):
-    index: int
-    delta: DeltaMessage
-    finish_reason: Optional[Literal["stop", "length"]]
-
-
-class ChatCompletionResponse(BaseModel):
-    model: str
-    object: Literal["chat.completion", "chat.completion.chunk"]
-    choices: List[
-        Union[ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice]
-    ]
-    created: Optional[int] = Field(default_factory=lambda: int(time.time()))
 
 
 @app.get("/v1/models", response_model=ModelList)
@@ -520,7 +458,7 @@ async def completion_without_lora(request: ChatCompletionRequest):
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest):
-    global tokenizer, engine, llm_checkpoint_path
+    global tokenizer, engine
 
     gen_kwargs = {}
     if request.temperature is not None:
@@ -550,16 +488,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
         functions=request.functions,
         embeddings_buffer=request.embeddings_buffer
     )
-
-    # 暂不支持流式输出
-    if request.stream:
-        if request.functions:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid request: Function calling is not yet implemented for stream mode.",
-            )
-        generate = predict(query, history, request.model, stop_words, gen_kwargs)
-        return EventSourceResponse(generate, media_type="text/event-stream")
 
     stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
     if stop_words_ids is not None:
@@ -689,16 +617,6 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
                     embeddings_buffer=request.embeddings_buffer
                 )
 
-                # 暂不支持流式输出
-                if request.stream:
-                    if request.functions:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid request: Function calling is not yet implemented for stream mode.",
-                        )
-                    generate = predict(query, history, request.model, stop_words, gen_kwargs)
-                    return EventSourceResponse(generate, media_type="text/event-stream")
-
                 stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
                 if stop_words_ids is not None:
                     stop_words_logits_processor = StopWordsLogitsProcessor(
@@ -785,71 +703,13 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
         websocket_manager.disconnect(websocket)
 
 
-def _dump_json(data: BaseModel, *args, **kwargs) -> str:
-    try:
-        return data.model_dump_json(*args, **kwargs)
-    except AttributeError:  # pydantic<2.0.0
-        return data.json(*args, **kwargs)  # noqa
-
-
-# 暂不支持流式输出
-async def predict(
-        query: str, history: List[List[str]], model_id: str, stop_words: List[str], gen_kwargs: Dict,
-):
-    global model, tokenizer
-    choice_data = ChatCompletionResponseStreamChoice(
-        index=0, delta=DeltaMessage(role="assistant"), finish_reason=None
-    )
-    chunk = ChatCompletionResponse(
-        model=model_id, choices=[choice_data], object="chat.completion.chunk"
-    )
-    yield "{}".format(_dump_json(chunk, exclude_unset=True))
-
-    current_length = 0
-    stop_words_ids = [tokenizer.encode(s) for s in stop_words] if stop_words else None
-    if stop_words:
-        # TODO: It's a little bit tricky to trim stop words in the stream mode.
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid request: custom stop words are not yet supported for stream mode.",
-        )
-    response_generator = model.chat_stream(
-        tokenizer, query, history=history, stop_words_ids=stop_words_ids, **gen_kwargs
-    )
-    for new_response in response_generator:
-        if len(new_response) == current_length:
-            continue
-
-        new_text = new_response[current_length:]
-        current_length = len(new_response)
-
-        choice_data = ChatCompletionResponseStreamChoice(
-            index=0, delta=DeltaMessage(content=new_text), finish_reason=None
-        )
-        chunk = ChatCompletionResponse(
-            model=model_id, choices=[choice_data], object="chat.completion.chunk"
-        )
-        yield "{}".format(_dump_json(chunk, exclude_unset=True))
-
-    choice_data = ChatCompletionResponseStreamChoice(
-        index=0, delta=DeltaMessage(), finish_reason="stop"
-    )
-    chunk = ChatCompletionResponse(
-        model=model_id, choices=[choice_data], object="chat.completion.chunk"
-    )
-    yield "{}".format(_dump_json(chunk, exclude_unset=True))
-    yield "[DONE]"
-
-    _gc()
-
-
 def _get_args():
     parser = ArgumentParser()
     parser.add_argument(
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen2.5-32B-Instruct-GPTQ-Int4",
+        default="/home/madousama/llm/deepseek-r1-distill-qwen-32b-gptq-int4",
         help="Checkpoint name or path, default to %(default)r",
     )
     parser.add_argument(
@@ -894,21 +754,12 @@ if __name__ == "__main__":
             BasicAuthMiddleware, username=args.api_auth.split(":")[0], password=args.api_auth.split(":")[1]
         )
 
-    if args.cpu_only:
-        device_map = "cpu"
-    else:
-        device_map = "auto"
-
-    engine_args = AsyncEngineArgs(
+    engine = vllm_start_engine(
         model=llm_checkpoint_path,
-        trust_remote_code=True,
-        disable_log_stats=True,
         gpu_memory_utilization=0.7,
         max_model_len=8000,
-        tensor_parallel_size=1,
-        enable_lora=True
+        tensor_parallel_size=1
     )
-    engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     uvicorn.run(app, host=args.server_name, port=args.server_port, workers=1)
 
