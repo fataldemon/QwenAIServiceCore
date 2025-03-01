@@ -13,7 +13,7 @@ from transformers import AutoTokenizer
 from llm.local_llm import vllm_start_engine, generate, generate_with_lora
 from models.base import (ModelCard, ModelList, ChatCompletionRequest,
                          ChatCompletionResponse)
-from template import _get_args
+from template import _get_args, llm_checkpoint_path, active_lora_path
 from utils.websocketutils import WebsocketManager
 
 
@@ -142,13 +142,6 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
 
 if __name__ == "__main__":
     args = _get_args()
-
-    # LLM and Lora path
-    # llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-14B-Instruct-GPTQ-Int4"
-    # llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-VL-7B-Instruct"
-    llm_checkpoint_path = "/home/madousama/llm/deepseek-r1-distill-qwen-32b-gptq-int4"
-    # active_lora_path = "/home/madousama/qlora/Alice5.0_20250109"
-    active_lora_path = "/home/madousama/qlora/Alice6.0_deepseek_20250228"
 
     tokenizer = AutoTokenizer.from_pretrained(
         llm_checkpoint_path,

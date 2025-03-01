@@ -23,16 +23,16 @@ Begin!"""
 
 _TEXT_COMPLETION_CMD = object()
 
+# LLM and Lora path
+# llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-14B-Instruct-GPTQ-Int4"
+# llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-VL-7B-Instruct"
+llm_checkpoint_path = "/home/madousama/llm/deepseek-r1-distill-qwen-32b-gptq-int4"
+# active_lora_path = "/home/madousama/qlora/Alice5.0_20250109"
+active_lora_path = "/home/madousama/qlora/Alice6.0_deepseek_20250228"
+
 
 def _get_args():
     parser = ArgumentParser()
-    parser.add_argument(
-        "-c",
-        "--checkpoint-path",
-        type=str,
-        default="/home/madousama/llm/deepseek-r1-distill-qwen-32b-gptq-int4",
-        help="Checkpoint name or path, default to %(default)r",
-    )
     parser.add_argument(
         "--api-auth", help="API authentication credentials"
     )

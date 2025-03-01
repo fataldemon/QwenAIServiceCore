@@ -365,7 +365,7 @@ async def generate(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionReq
 
 
 async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
-                   active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
+                             active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -416,7 +416,6 @@ async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCom
                      # {"role": "function", "content": observation.replace("\nThought:", "")}]
                      {"role": "user", "content": observation.replace("\nThought:", "")}]
         query = messages[-1]["content"]
-        # response = await text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
         messages = history + [{"role": "user", "content": query}]
 
@@ -434,7 +433,11 @@ async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCom
         # inputs={"prompt_token_ids": input_ids},
         sampling_params=sampling_params,
         request_id=request_id,
-        lora_request=LoRARequest(lora_name="alice", lora_int_id=1, lora_path=active_lora_path)
+        lora_request=LoRARequest(
+            lora_name="alice",
+            lora_int_id=1,
+            lora_path=active_lora_path
+        )
     )
     final_result = None
     async for result in result_generator:
@@ -470,7 +473,7 @@ async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCom
             character=request.character,
             subject="setting"
         )
-        embedding_list = reorganize_index(embedding_list, result_list, 7)
+        embedding_list = reorganize_index(embedding_list, result_list, 20)
         choice_data.embedding_list = embedding_list
     else:
         choice_data.embedding_list = []
