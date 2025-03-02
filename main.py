@@ -79,7 +79,8 @@ async def completion_without_lora(request: ChatCompletionRequest):
     choice_data = await chat(
         engine=engine,
         tokenizer=tokenizer,
-        request=request
+        request=request,
+        max_tokens=3000
     )
     return ChatCompletionResponse(
         model=request.model, choices=[choice_data], object="chat.completion"
@@ -93,6 +94,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     choice_data = await chat_on_setting(
         engine=engine,
         tokenizer=tokenizer,
+        max_tokens=600,
         request=request,
         active_lora_path=args.lora_path,
         index=0
@@ -120,6 +122,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
                 choice_data = await chat_on_setting(
                     engine=engine,
                     tokenizer=tokenizer,
+                    max_tokens=600,
                     request=request,
                     active_lora_path=args.lora_path,
                     index=1

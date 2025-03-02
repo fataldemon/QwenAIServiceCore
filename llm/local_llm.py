@@ -315,20 +315,20 @@ def add_extra_stop_words(stop_words):
 
 
 # 调用LLMEngine进行推理
-async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_kwargs,
+async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_kwargs, max_tokens,
                     active_lora_path: str, logits_processor: LogitsProcessorList = None) -> str:
     input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-    print(f"Input token numbers: {len(input_ids)}")
+    print(f">>>Input Tokens: {len(input_ids)} tokens")
     if logits_processor is not None:
         sampling_params = SamplingParams(
             **gen_kwargs,
-            max_tokens=3000,
+            max_tokens=max_tokens,
             logits_processors=logits_processor,
         )
     else:
         sampling_params = SamplingParams(
             **gen_kwargs,
-            max_tokens=3000,
+            max_tokens=max_tokens,
             stop_token_ids=[tokenizer.eos_token_id]
         )
     timestamp = datetime.datetime.now()
@@ -354,15 +354,17 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
         final_result = result
     response = final_result.outputs[0].text
     # 计算吞吐量
-    time_cost = (datetime.datetime.now() - timestamp).seconds
+    time_cost = (datetime.datetime.now() - timestamp).total_seconds()
     out_tokens = len(final_result.outputs[0].token_ids)
-    speed = out_tokens/time_cost
-    print(f"Output token numbers: {out_tokens}, Average Throughput: {speed} tokens/s")
+    speed = 0
+    if time_cost != 0:
+        speed = out_tokens/time_cost
+    print(f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
 
     return response
 
 
-async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest) -> ChatCompletionResponseChoice:
+async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest, max_tokens: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -383,6 +385,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     response = await vllm_generate(
         engine,
         tokenizer,
+        max_tokens=max_tokens,
         messages=message,
         gen_kwargs=gen_kwargs,
         active_lora_path=""
@@ -397,7 +400,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     return choice_data
 
 
-async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
+async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest, max_tokens: int,
                                 active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
@@ -455,6 +458,7 @@ async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatComple
     response = await vllm_generate(
         engine,
         tokenizer,
+        max_tokens=max_tokens,
         messages=messages,
         gen_kwargs=gen_kwargs,
         logits_processor=logits_processor,
