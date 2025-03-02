@@ -25,14 +25,29 @@ _TEXT_COMPLETION_CMD = object()
 
 # LLM and Lora path
 # llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-14B-Instruct-GPTQ-Int4"
-# llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-VL-7B-Instruct"
+# llm_checkpoint_path = "/home/madousama/llm/Qwen2.5-VL-7B-Instruct-AWQ"
 llm_checkpoint_path = "/home/madousama/llm/deepseek-r1-distill-qwen-32b-gptq-int4"
 # active_lora_path = "/home/madousama/qlora/Alice5.0_20250109"
 active_lora_path = "/home/madousama/qlora/Alice6.0_deepseek_20250228"
+# active_lora_path = ""
+gpu_memory_utilization = 0.7
+max_model_len = 10000
 
 
 def _get_args():
     parser = ArgumentParser()
+    parser.add_argument(
+        "--checkpoint-path", default=llm_checkpoint_path, help="Path of LLM Checkpoint"
+    )
+    parser.add_argument(
+        "--lora-path", default=active_lora_path, help="Path of Lora Adapter"
+    )
+    parser.add_argument(
+        "--gpu-memory-utilization", default=gpu_memory_utilization, help="GPU Memory Usage Percentage"
+    )
+    parser.add_argument(
+        "--max-model-len", default=max_model_len, help="Max Tokens for Input"
+    )
     parser.add_argument(
         "--api-auth", help="API authentication credentials"
     )

@@ -24,12 +24,14 @@ def vllm_start_engine(
 ) -> AsyncLLMEngine:
     engine_args = AsyncEngineArgs(
         model=model,
+        device="cuda",
         trust_remote_code=True,
         disable_log_stats=True,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
-        enable_lora=True
+        enable_lora=True,
+        enable_sleep_mode=True
     )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine
@@ -312,30 +314,55 @@ def add_extra_stop_words(stop_words):
     return stop_words
 
 
-# 在剥离Lora的情况下进行推理（原生）
-async def original_completion(engine: AsyncLLMEngine, tokenizer, message: list, gen_kwargs) -> str:
-    input_ids = tokenizer.apply_chat_template(message, tokenize=True, add_generation_prompt=True)
-    sampling_params = SamplingParams(
-        **gen_kwargs,
-        max_tokens=3000,
-        stop_token_ids=[tokenizer.eos_token_id]
-    )
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    request_id = f"{timestamp}{random.randint(1, 1000)}"
-    result_generator = engine.generate(
-        prompt=TokensPrompt(prompt_token_ids=input_ids),
-        # inputs={"prompt_token_ids": input_ids},
-        sampling_params=sampling_params,
-        request_id=request_id
-    )
+# 调用LLMEngine进行推理
+async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_kwargs,
+                    active_lora_path: str, logits_processor: LogitsProcessorList = None) -> str:
+    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    print(f"Input token numbers: {len(input_ids)}")
+    if logits_processor is not None:
+        sampling_params = SamplingParams(
+            **gen_kwargs,
+            max_tokens=3000,
+            logits_processors=logits_processor,
+        )
+    else:
+        sampling_params = SamplingParams(
+            **gen_kwargs,
+            max_tokens=3000,
+            stop_token_ids=[tokenizer.eos_token_id]
+        )
+    timestamp = datetime.datetime.now()
+    request_id = f"{timestamp.strftime("%Y%m%d%H%M%S")}{random.randint(1, 1000)}"
+    # 没有Lora路径时调用原生模型
+    if active_lora_path != "":
+        result_generator = engine.generate(
+            prompt=TokensPrompt(prompt_token_ids=input_ids),
+            # inputs={"prompt_token_ids": input_ids},
+            sampling_params=sampling_params,
+            request_id=request_id,
+            lora_request=LoRARequest(lora_name="alice", lora_int_id=1, lora_path=active_lora_path)
+        )
+    else:
+        result_generator = engine.generate(
+            prompt=TokensPrompt(prompt_token_ids=input_ids),
+            # inputs={"prompt_token_ids": input_ids},
+            sampling_params=sampling_params,
+            request_id=request_id
+        )
     final_result = None
     async for result in result_generator:
         final_result = result
     response = final_result.outputs[0].text
+    # 计算吞吐量
+    time_cost = (datetime.datetime.now() - timestamp).seconds
+    out_tokens = len(final_result.outputs[0].token_ids)
+    speed = out_tokens/time_cost
+    print(f"Output token numbers: {out_tokens}, Average Throughput: {speed} tokens/s")
+
     return response
 
 
-async def generate(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest) -> ChatCompletionResponseChoice:
+async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -353,7 +380,13 @@ async def generate(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionReq
     message = request.messages
     print(f"{message}")
     # 调用无Lora的大模型
-    response = await original_completion(engine, tokenizer, message, gen_kwargs=gen_kwargs)
+    response = await vllm_generate(
+        engine,
+        tokenizer,
+        messages=message,
+        gen_kwargs=gen_kwargs,
+        active_lora_path=""
+    )
     print(f"Assistant:{response}")
     choice_data = ChatCompletionResponseChoice(
         index=0,
@@ -364,8 +397,8 @@ async def generate(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionReq
     return choice_data
 
 
-async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
-                             active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
+async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
+                                active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -419,30 +452,14 @@ async def generate_with_lora(engine: AsyncLLMEngine, tokenizer, request: ChatCom
     else:
         messages = history + [{"role": "user", "content": query}]
 
-    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-    print(f"Input token numbers: {len(input_ids)}")
-    sampling_params = SamplingParams(
-        **gen_kwargs,
-        max_tokens=600,
-        logits_processors=logits_processor
+    response = await vllm_generate(
+        engine,
+        tokenizer,
+        messages=messages,
+        gen_kwargs=gen_kwargs,
+        logits_processor=logits_processor,
+        active_lora_path=active_lora_path
     )
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    request_id = f"{timestamp}{random.randint(1, 1000)}"
-    result_generator = engine.generate(
-        prompt=TokensPrompt(prompt_token_ids=input_ids),
-        # inputs={"prompt_token_ids": input_ids},
-        sampling_params=sampling_params,
-        request_id=request_id,
-        lora_request=LoRARequest(
-            lora_name="alice",
-            lora_int_id=1,
-            lora_path=active_lora_path
-        )
-    )
-    final_result = None
-    async for result in result_generator:
-        final_result = result
-    response = final_result.outputs[0].text
 
     print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()

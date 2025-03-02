@@ -10,10 +10,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
-from llm.local_llm import vllm_start_engine, generate, generate_with_lora
+from llm.local_llm import vllm_start_engine, chat, chat_on_setting
 from models.base import (ModelCard, ModelList, ChatCompletionRequest,
                          ChatCompletionResponse)
-from template import _get_args, llm_checkpoint_path, active_lora_path
+from template import _get_args
 from utils.websocketutils import WebsocketManager
 
 
@@ -65,13 +65,6 @@ app.add_middleware(
 )
 
 
-@app.get("/v1/models", response_model=ModelList)
-async def list_models():
-    global model_args
-    model_card = ModelCard(id="gpt-3.5-turbo")
-    return ModelList(data=[model_card])
-
-
 #
 # Temporarily, the system role does not work as expected.
 # We advise that you write the setups for role-play in your query,
@@ -83,7 +76,7 @@ async def list_models():
 async def completion_without_lora(request: ChatCompletionRequest):
     global tokenizer
 
-    choice_data = await generate(
+    choice_data = await chat(
         engine=engine,
         tokenizer=tokenizer,
         request=request
@@ -97,11 +90,11 @@ async def completion_without_lora(request: ChatCompletionRequest):
 async def create_chat_completion(request: ChatCompletionRequest):
     global tokenizer, engine
 
-    choice_data = await generate_with_lora(
+    choice_data = await chat_on_setting(
         engine=engine,
         tokenizer=tokenizer,
         request=request,
-        active_lora_path=active_lora_path,
+        active_lora_path=args.lora_path,
         index=0
     )
 
@@ -124,11 +117,11 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
             try:
                 request = ChatCompletionRequest.parse_obj(data)
 
-                choice_data = await generate_with_lora(
+                choice_data = await chat_on_setting(
                     engine=engine,
                     tokenizer=tokenizer,
                     request=request,
-                    active_lora_path=active_lora_path,
+                    active_lora_path=args.lora_path,
                     index=1
                 )
 
@@ -144,7 +137,7 @@ if __name__ == "__main__":
     args = _get_args()
 
     tokenizer = AutoTokenizer.from_pretrained(
-        llm_checkpoint_path,
+        args.checkpoint_path,
     )
 
     if args.api_auth:
@@ -153,9 +146,9 @@ if __name__ == "__main__":
         )
 
     engine = vllm_start_engine(
-        model=llm_checkpoint_path,
-        gpu_memory_utilization=0.7,
-        max_model_len=8000,
+        model=args.checkpoint_path,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len,
         tensor_parallel_size=1
     )
 
