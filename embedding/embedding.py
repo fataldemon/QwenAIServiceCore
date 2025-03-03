@@ -4,7 +4,7 @@ import faiss
 import numpy as np
 import pickle
 
-model = SentenceTransformer('DMetaSoul/Dmeta-embedding', device='cpu')
+model = SentenceTransformer('intfloat/multilingual-e5-large-instruct', device='cuda')
 # nlp = spacy.load("zh_core_web_trf")
 
 # character表示对应角色 subject表示主题：["setting", "expression", "behaviour", "memory"]
@@ -101,7 +101,13 @@ def get_identity(character: str) -> list:
     return identities
 
 
+def get_detailed_instruct(task_description: str, query: str) -> str:
+    return f'Instruct: {task_description}\nQuery: {query}'
+
+
 def vector_search(question: str, top_k: int, character: str, subject: str) -> tuple[list[str], list[int]]:
+    task = '给一句对话内容，找到和对话中出现的内容相关的设定信息'
+    question = get_detailed_instruct(task, question)
     vector_folder = VECTOR_FOLDER.format(character=character, subject=subject)
     if subject == "setting":
         for identity in get_identity(character):
