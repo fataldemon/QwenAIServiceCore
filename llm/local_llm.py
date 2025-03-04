@@ -11,7 +11,8 @@ from vllm import SamplingParams, AsyncEngineArgs, AsyncLLMEngine, TokensPrompt
 from vllm.lora.request import LoRARequest
 from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionRequest,
                          ChatCompletionResponseChoice, ChatCompletionResponse)
-from embedding.embedding import process_embedding, vector_search, reorganize_index, check_emotion
+from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
+                                 write_as_memory, generate_vector)
 from utils.utils import get_function_description, remove_action, remove_emotion, StopWordsLogitsProcessor
 from template import SETTING, REACT_INSTRUCTION, _TEXT_COMPLETION_CMD, _get_args
 
@@ -57,6 +58,20 @@ def trim_stop_words(response, stop_words):
     return response
 
 
+# To work around that unpleasant leading-\n tokenization issue!
+def add_extra_stop_words(stop_words):
+    if stop_words:
+        _stop_words = []
+        _stop_words.extend(stop_words)
+        for x in stop_words:
+            s = x.lstrip("\n")
+            if s and (s not in _stop_words):
+                _stop_words.append(s)
+        return _stop_words
+    return stop_words
+
+
+# 解析ReAct格式的请求数据
 def parse_messages(character, messages, on_embedding, functions, information, embeddings_buffer):
     if all(m.role != "user" for m in messages):
         raise HTTPException(
@@ -223,6 +238,7 @@ def parse_messages(character, messages, on_embedding, functions, information, em
     return query, history, embedding_list
 
 
+# 解析ReAct格式的响应数据
 def parse_response(response):
     func_name, func_args = "", ""
     i = response.find("Action:")
@@ -301,22 +317,9 @@ def parse_response(response):
     return choice_data
 
 
-# To work around that unpleasant leading-\n tokenization issue!
-def add_extra_stop_words(stop_words):
-    if stop_words:
-        _stop_words = []
-        _stop_words.extend(stop_words)
-        for x in stop_words:
-            s = x.lstrip("\n")
-            if s and (s not in _stop_words):
-                _stop_words.append(s)
-        return _stop_words
-    return stop_words
-
-
 # 调用LLMEngine进行推理
 async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_kwargs, max_tokens,
-                    active_lora_path: str, logits_processor: LogitsProcessorList = None) -> str:
+                        active_lora_path: str, logits_processor: LogitsProcessorList = None) -> str:
     input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
     print(f">>>Input Tokens: {len(input_ids)} tokens")
     if logits_processor is not None:
@@ -358,13 +361,15 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
     out_tokens = len(final_result.outputs[0].token_ids)
     speed = 0
     if time_cost != 0:
-        speed = out_tokens/time_cost
-    print(f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
+        speed = out_tokens / time_cost
+    print(
+        f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
 
     return response
 
 
-async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest, max_tokens: int) -> ChatCompletionResponseChoice:
+async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
+               max_tokens: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -391,6 +396,10 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
         active_lora_path=""
     )
     print(f"Assistant:{response}")
+    # 如果是知识点概要就存储
+    if type == 1:
+        print(f"Knowledge Saved: {response}")
+
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought="",
@@ -401,7 +410,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
 
 
 async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest, max_tokens: int,
-                                active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
+                          active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -492,7 +501,8 @@ async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatComple
             content,
             6,
             character=request.character,
-            subject="setting"
+            subject="setting",
+            instruct='给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的设定信息'
         )
         embedding_list = reorganize_index(embedding_list, result_list, 20)
         choice_data.embedding_list = embedding_list

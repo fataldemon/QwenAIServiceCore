@@ -5,7 +5,6 @@ import numpy as np
 import pickle
 
 model = SentenceTransformer('intfloat/multilingual-e5-large-instruct', device='cuda')
-# nlp = spacy.load("zh_core_web_trf")
 
 # character表示对应角色 subject表示主题：["setting", "expression", "behaviour", "memory"]
 DOC_FOLDER = """embedding/{character}/{subject}/"""
@@ -19,6 +18,11 @@ def read_as_content(file_name: str, doc_folder: str) -> str:
     return file_content
 
 
+def write_as_memory(file_name: str, doc_folder: str, content: str):
+    with open(doc_folder + file_name, 'a', encoding="utf-8") as file:
+        file.write(content)
+
+
 # 将faiss的索引index写到文件中，返回文件名
 def write_index(index, vector_folder: str) -> str:
     faiss.write_index(index, vector_folder + 'index.faiss')
@@ -26,7 +30,7 @@ def write_index(index, vector_folder: str) -> str:
 
 
 def generate_vector(character: str, subject: str):
-    if subject not in ["setting", "expression", "behaviour", "memory"]:
+    if subject not in ["setting", "expression", "behaviour", "memory", "knowledge"]:
         return "subject incorrect"
     content = ""
     doc_folder = DOC_FOLDER.format(character=character, subject=subject)
@@ -73,16 +77,75 @@ def generate_vector(character: str, subject: str):
         pickle.dump(tags_map, f)
     with open(vector_folder + 'materials.pkl', 'wb') as f:
         pickle.dump(search_materials, f)
-    #     # 用spacy分割为句子
-    #     doc = nlp(paragraphs[i])
-    #     sentences += [sent.text for sent in doc.sents]
-    # with open(vector_folder + 'sentences.pkl', 'wb') as f:
-    #     pickle.dump(sentences, f)
 
     with open(vector_folder + 'paragraphs.pkl', 'wb') as f:
         pickle.dump(paragraphs, f)
     # 生成向量
     search_embeddings = model.encode(search_materials)
+    # 保存文件内容为向量
+    np.save(vector_folder + "srch_embeddings", search_embeddings)
+    dimension = search_embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(search_embeddings)
+    write_index(index, vector_folder)
+    return "success"
+
+
+def add_knowledge(content: str, character: str):
+    doc_folder = DOC_FOLDER.format(character=character, subject="knowledge")
+    vector_folder = VECTOR_FOLDER.format(character=character, subject="knowledge")
+    write_as_memory(file_name="knowledge.mem", doc_folder=DOC_FOLDER.format(character=character, subject="knowledge"),
+                    content=content)
+    content = ""
+    if not os.path.exists(vector_folder):
+        # 如果不存在，创建目录，并全量更新向量
+        os.mkdir(vector_folder)
+        return generate_vector(character, "knowledge")
+
+    # 按换行符分割为段落
+    paragraphs = content.split("\n")
+    tags = []
+    # 读取旧数据
+    with open(vector_folder + 'materials.pkl', 'rb') as f:
+        materials = pickle.load(f)
+    with open(vector_folder + 'tags_map.pkl', 'rb') as f:
+        tags_map = pickle.load(f)
+    materials_num = len(materials)
+    for i in range(len(paragraphs)):
+        paragraph = paragraphs[i]
+        # 对注解进行解析
+        if "##" in paragraph:
+            tag_list = paragraph.split("##")
+            paragraphs[i] = tag_list[0]
+            tag_list = tag_list[1:]
+            print(tag_list)
+            for tag in tag_list:
+                tag = tag.strip()
+                if tag not in tags:
+                    tags.append(tag)
+                    if tags_map.get(tag) is not None:
+                        tags_map[tag] += [materials_num + i]
+                    else:
+                        tags_map[tag].append(materials_num + i)
+                else:
+                    tags_map[tag].append(materials_num + i)
+    print(paragraphs)
+    print(tags_map)
+
+    # 搜索时将注解与段落并列，制造出搜索材料，并以搜索材料为基准生成向量
+    materials += paragraphs + tags
+    if not os.path.exists(vector_folder):
+        # 如果不存在，创建目录
+        os.mkdir(vector_folder)
+    with open(vector_folder + 'tags_map.pkl', 'wb') as f:
+        pickle.dump(tags_map, f)
+    with open(vector_folder + 'materials.pkl', 'wb') as f:
+        pickle.dump(materials, f)
+
+    with open(vector_folder + 'paragraphs.pkl', 'wb') as f:
+        pickle.dump(paragraphs, f)
+    # 生成向量
+    search_embeddings = model.encode(materials)
     # 保存文件内容为向量
     np.save(vector_folder + "srch_embeddings", search_embeddings)
     dimension = search_embeddings.shape[1]
@@ -105,8 +168,8 @@ def get_detailed_instruct(task_description: str, query: str) -> str:
     return f'Instruct: {task_description}\nQuery: {query}'
 
 
-def vector_search(question: str, top_k: int, character: str, subject: str) -> tuple[list[str], list[int]]:
-    task = '给一句对话内容，找到和对话中出现的内容相关的设定信息'
+def vector_search(question: str, top_k: int, character: str, subject: str, instruct: str) -> tuple[list[str], list[int]]:
+    task = instruct
     question = get_detailed_instruct(task, question)
     vector_folder = VECTOR_FOLDER.format(character=character, subject=subject)
     if subject == "setting":
@@ -167,7 +230,8 @@ def process_embedding(content: str, top_k: int, character: str, subject: str, cl
         question=content,
         character=character,
         subject=subject,
-        top_k=top_k
+        top_k=top_k,
+        instruct='给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的设定信息'
     )
     embedding_index = reorganize_index(
         base_list=client_buffer,
@@ -193,7 +257,7 @@ def check_emotion(emotion: str, character: str) -> str:
         return emotion
     else:
         index = faiss.read_index(vector_folder + 'index.faiss')
-        search = model.encode([emotion_text])
+        search = model.encode([get_detailed_instruct('找到与之最相近的表情', emotion_text)])
         accuracy, matches = index.search(search, 1)
         i = matches[0][0]
         final_emotion = materials[i].strip()
@@ -203,9 +267,11 @@ def check_emotion(emotion: str, character: str) -> str:
 
 if __name__ == "__main__":
     # check_emotion("不知所措", "tendou_arisu")
-    print("Setting:" + generate_vector("tendou_arisu", "setting"))
-    print("Expression:" + generate_vector("tendou_arisu", "expression"))
-    print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
-    print("Memory:" + generate_vector("tendou_arisu", "memory"))
+    # print("Setting:" + generate_vector("tendou_arisu", "setting"))
+    # print("Expression:" + generate_vector("tendou_arisu", "expression"))
+    # print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
+    # print("Memory:" + generate_vector("tendou_arisu", "memory"))
+    # print("Memory:" + generate_vector("tendou_arisu", "knowledge"))
+    add_knowledge("12345","tendou_arisu")
 
 

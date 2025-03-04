@@ -44,6 +44,7 @@ class ChatCompletionRequest(BaseModel):
     embeddings_buffer: Optional[List[int]] = []
     on_embedding: Optional[bool] = True
     character: Optional[str] = "tendou_arisu"
+    type: Optional[int] = 0  # 0是普通对话，1是总结知识点，2是对话历史长期记忆
 
 
 class ChatCompletionResponseChoice(BaseModel):
