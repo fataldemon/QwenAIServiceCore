@@ -12,7 +12,7 @@ from vllm.lora.request import LoRARequest
 from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionRequest,
                          ChatCompletionResponseChoice, ChatCompletionResponse)
 from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
-                                 write_as_memory, generate_vector)
+                                 add_knowledge)
 from utils.utils import get_function_description, remove_action, remove_emotion, StopWordsLogitsProcessor
 from template import SETTING, REACT_INSTRUCTION, _TEXT_COMPLETION_CMD, _get_args
 
@@ -195,7 +195,6 @@ def parse_messages(character, messages, on_embedding, functions, information, em
             content=content,
             top_k=3,
             character=character,
-            subject="setting",
             client_information=information,
             client_buffer=embeddings_buffer,
             max_length=7
@@ -397,7 +396,14 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     )
     print(f"Assistant:{response}")
     # 如果是知识点概要就存储
-    if type == 1:
+    print(f'Assistant Type: {request.type}')
+    if request.type == 1:
+        reply = response
+        if "<think>" in response and "</think>" in response:
+            index_t = response.rfind("</think>\n\n")
+            if index_t != -1:
+                reply = response[index_t + len("</think>\n\n"):]
+        add_knowledge(content=reply, character=request.character)
         print(f"Knowledge Saved: {response}")
 
     choice_data = ChatCompletionResponseChoice(

@@ -20,6 +20,8 @@ def read_as_content(file_name: str, doc_folder: str) -> str:
 
 def write_as_memory(file_name: str, doc_folder: str, content: str):
     with open(doc_folder + file_name, 'a', encoding="utf-8") as file:
+        if not content.endswith('\n'):
+            content += '\n'
         file.write(content)
 
 
@@ -96,7 +98,6 @@ def add_knowledge(content: str, character: str):
     vector_folder = VECTOR_FOLDER.format(character=character, subject="knowledge")
     write_as_memory(file_name="knowledge.mem", doc_folder=DOC_FOLDER.format(character=character, subject="knowledge"),
                     content=content)
-    content = ""
     if not os.path.exists(vector_folder):
         # 如果不存在，创建目录，并全量更新向量
         os.mkdir(vector_folder)
@@ -110,6 +111,8 @@ def add_knowledge(content: str, character: str):
         materials = pickle.load(f)
     with open(vector_folder + 'tags_map.pkl', 'rb') as f:
         tags_map = pickle.load(f)
+    with open(vector_folder + 'paragraphs.pkl', 'rb') as f:
+        paragraphs_old = pickle.load(f)
     materials_num = len(materials)
     for i in range(len(paragraphs)):
         paragraph = paragraphs[i]
@@ -129,11 +132,12 @@ def add_knowledge(content: str, character: str):
                         tags_map[tag].append(materials_num + i)
                 else:
                     tags_map[tag].append(materials_num + i)
-    print(paragraphs)
-    print(tags_map)
+    print(f"Paragraphs: {paragraphs}")
+    print(f"Tags_Map: {tags_map}")
 
     # 搜索时将注解与段落并列，制造出搜索材料，并以搜索材料为基准生成向量
     materials += paragraphs + tags
+    paragraphs_old += paragraphs
     if not os.path.exists(vector_folder):
         # 如果不存在，创建目录
         os.mkdir(vector_folder)
@@ -141,11 +145,14 @@ def add_knowledge(content: str, character: str):
         pickle.dump(tags_map, f)
     with open(vector_folder + 'materials.pkl', 'wb') as f:
         pickle.dump(materials, f)
-
     with open(vector_folder + 'paragraphs.pkl', 'wb') as f:
-        pickle.dump(paragraphs, f)
-    # 生成向量
-    search_embeddings = model.encode(materials)
+        pickle.dump(paragraphs_old, f)
+    # 读取向量
+    embeddings = model.encode(paragraphs + tags)
+    print(embeddings)
+    old_embeddings = np.load(vector_folder + "srch_embeddings.npy")
+    print(old_embeddings)
+    search_embeddings = np.vstack((old_embeddings, embeddings))
     # 保存文件内容为向量
     np.save(vector_folder + "srch_embeddings", search_embeddings)
     dimension = search_embeddings.shape[1]
@@ -172,6 +179,8 @@ def vector_search(question: str, top_k: int, character: str, subject: str, instr
     task = instruct
     question = get_detailed_instruct(task, question)
     vector_folder = VECTOR_FOLDER.format(character=character, subject=subject)
+    if not (os.path.exists(vector_folder + "materials.pkl") and os.path.exists(vector_folder + "tags_map.pkl")):
+        return [""], [0]
     if subject == "setting":
         for identity in get_identity(character):
             question = question.replace(identity, "你")
@@ -224,14 +233,14 @@ def reorganize_index(base_list: list[int], append_list: list[int], max_length: i
     return base_list[-max_length:]
 
 
-def process_embedding(content: str, top_k: int, character: str, subject: str, client_information: str,
+def process_embedding(content: str, top_k: int, character: str, client_information: str,
                       client_buffer: list[int], max_length: int) -> tuple:
     search_result, server_embedding_index_list = vector_search(
         question=content,
         character=character,
-        subject=subject,
+        subject="setting",
         top_k=top_k,
-        instruct='给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的设定信息'
+        instruct='给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息'
     )
     embedding_index = reorganize_index(
         base_list=client_buffer,
@@ -241,10 +250,16 @@ def process_embedding(content: str, top_k: int, character: str, subject: str, cl
     server_embedding_list = find_material_by_index(
         index_list=embedding_index,
         character=character,
-        subject=subject
+        subject="setting"
     )
-    knowledge = f"这些是你知道的事实：{server_embedding_list}\n{client_information}\n"
-    return knowledge, embedding_index
+    knowledge = vector_search(
+        question=content,
+        character=character,
+        subject="knowledge",
+        top_k=3,
+        instruct='给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息')
+    full_knowledge = f"这些是你知道的事实：{server_embedding_list}\n这些是你了解的知识：{knowledge}\n{client_information}\n"
+    return full_knowledge, embedding_index
 
 
 def check_emotion(emotion: str, character: str) -> str:
@@ -266,12 +281,13 @@ def check_emotion(emotion: str, character: str) -> str:
 
 
 if __name__ == "__main__":
-    # check_emotion("不知所措", "tendou_arisu")
     # print("Setting:" + generate_vector("tendou_arisu", "setting"))
     # print("Expression:" + generate_vector("tendou_arisu", "expression"))
     # print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
     # print("Memory:" + generate_vector("tendou_arisu", "memory"))
-    # print("Memory:" + generate_vector("tendou_arisu", "knowledge"))
-    add_knowledge("12345","tendou_arisu")
+    print("Knowledge:" + generate_vector("tendou_arisu", "knowledge"))
+    print(vector_search("Horus Heresy", 3, "tendou_arisu", "knowledge",
+                        "给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息"))
+
 
 
