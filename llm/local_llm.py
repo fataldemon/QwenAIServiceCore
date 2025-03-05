@@ -326,6 +326,7 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
             **gen_kwargs,
             max_tokens=max_tokens,
             logits_processors=logits_processor,
+            stop=["\nObservation: "]
         )
     else:
         sampling_params = SamplingParams(

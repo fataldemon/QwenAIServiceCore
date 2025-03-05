@@ -3,8 +3,10 @@ import os
 import faiss
 import numpy as np
 import pickle
+from template import _get_args
 
-model = SentenceTransformer('intfloat/multilingual-e5-large-instruct', device='cuda')
+args = _get_args()
+model = SentenceTransformer(args.embedding_path, device='cuda')
 
 # character表示对应角色 subject表示主题：["setting", "expression", "behaviour", "memory"]
 DOC_FOLDER = """embedding/{character}/{subject}/"""
@@ -272,7 +274,8 @@ def check_emotion(emotion: str, character: str) -> str:
         return emotion
     else:
         index = faiss.read_index(vector_folder + 'index.faiss')
-        search = model.encode([get_detailed_instruct('找到与之最相近的表情', emotion_text)])
+        search = model.encode([get_detailed_instruct('找到与给出的表情表达情感最相近的表情', emotion_text)])
+        # search = model.encode([emotion_text])
         accuracy, matches = index.search(search, 1)
         i = matches[0][0]
         final_emotion = materials[i].strip()
@@ -281,13 +284,16 @@ def check_emotion(emotion: str, character: str) -> str:
 
 
 if __name__ == "__main__":
-    # print("Setting:" + generate_vector("tendou_arisu", "setting"))
-    # print("Expression:" + generate_vector("tendou_arisu", "expression"))
-    # print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
-    # print("Memory:" + generate_vector("tendou_arisu", "memory"))
+    print("Setting:" + generate_vector("tendou_arisu", "setting"))
+    print("Expression:" + generate_vector("tendou_arisu", "expression"))
+    print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
+    print("Memory:" + generate_vector("tendou_arisu", "memory"))
     print("Knowledge:" + generate_vector("tendou_arisu", "knowledge"))
-    print(vector_search("Horus Heresy", 3, "tendou_arisu", "knowledge",
+    print(vector_search("温泉乡", 3, "tendou_arisu", "setting",
                         "给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息"))
+    # print(vector_search("", 3, "tendou_arisu", "knowledge",
+    #                     "给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息"))
+    # print(check_emotion("关心", "tendou_arisu"))
 
 
 
