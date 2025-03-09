@@ -151,9 +151,7 @@ def add_knowledge(content: str, character: str):
         pickle.dump(paragraphs_old, f)
     # 读取向量
     embeddings = model.encode(paragraphs + tags)
-    print(embeddings)
     old_embeddings = np.load(vector_folder + "srch_embeddings.npy")
-    print(old_embeddings)
     search_embeddings = np.vstack((old_embeddings, embeddings))
     # 保存文件内容为向量
     np.save(vector_folder + "srch_embeddings", search_embeddings)
@@ -254,7 +252,7 @@ def process_embedding(content: str, top_k: int, character: str, client_informati
         character=character,
         subject="setting"
     )
-    knowledge = vector_search(
+    knowledge, knowledge_index_list = vector_search(
         question=content,
         character=character,
         subject="knowledge",
@@ -284,10 +282,10 @@ def check_emotion(emotion: str, character: str) -> str:
 
 
 if __name__ == "__main__":
-    print("Setting:" + generate_vector("tendou_arisu", "setting"))
-    print("Expression:" + generate_vector("tendou_arisu", "expression"))
-    print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
-    print("Memory:" + generate_vector("tendou_arisu", "memory"))
+    # print("Setting:" + generate_vector("tendou_arisu", "setting"))
+    # print("Expression:" + generate_vector("tendou_arisu", "expression"))
+    # print("Behavior:" + generate_vector("tendou_arisu", "behaviour"))
+    # print("Memory:" + generate_vector("tendou_arisu", "memory"))
     print("Knowledge:" + generate_vector("tendou_arisu", "knowledge"))
     print(vector_search("温泉乡", 3, "tendou_arisu", "setting",
                         "给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息"))
