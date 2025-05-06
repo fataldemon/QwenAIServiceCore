@@ -10,7 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
-from llm.local_llm import vllm_start_engine, chat, chat_on_setting
+from llm.local_llm_manage import vllm_start_engine, chat, chat_on_setting
 from models.base import (ModelCard, ModelList, ChatCompletionRequest,
                          ChatCompletionResponse)
 from template import _get_args

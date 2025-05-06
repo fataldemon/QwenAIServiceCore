@@ -385,7 +385,9 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
         gen_kwargs['repetition_penalty'] = request.repetition_penalty
 
     message = request.messages
+    tools = request.functions
     print(f"{message}")
+    print(f"{tools}")
     # 调用无Lora的大模型
     response = await vllm_generate(
         engine,

@@ -1,34 +1,51 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-device = "cuda" # the device to load the model onto
 
-model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen1.5-7B-Chat-GPTQ-Int4",
-    device_map="auto"
-)
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-7B-Chat-GPTQ-Int4")
+model_name = "/home/madousama/llm/Qwen3-32B-GPTQ-Int8"
 
-if __name__ == "__main__":
-    prompt = "你好，你是谁？"
+if __name__ == '__main__':
+    # load the tokenizer and the model
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="auto"
+    )
+
+    # prepare the model input
+    prompt = "Give me a short introduction to large language model."
     messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": prompt}
     ]
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
-        add_generation_prompt=True
+        add_generation_prompt=True,
+        enable_thinking=False  # Switches between thinking and non-thinking modes. Default is True.
     )
-    print(f"text={text}")
-    model_inputs = tokenizer([text], return_tensors="pt").to(device)
-    print(f"model_inputs={model_inputs}")
+    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    # model_inputs_k = tokenizer.apply_chat_template(
+    #     messages,
+    #     tokenize=True,
+    #     add_generation_prompt=True,
+    #     enable_thinking=False  # Switches between thinking and non-thinking modes. Default is True.
+    # )
 
+    # conduct text completion
     generated_ids = model.generate(
-        model_inputs.input_ids,
-        max_new_tokens=512
+        **model_inputs,
+        max_new_tokens=32768
     )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
+    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
 
-    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    print(response)
+    # parsing thinking content
+    try:
+        # rindex finding 151668 (</think>)
+        index = len(output_ids) - output_ids[::-1].index(151668)
+    except ValueError:
+        index = 0
+
+    thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
+    content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+    print("thinking content:", thinking_content)
+    print("content:", content)
