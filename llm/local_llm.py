@@ -23,15 +23,21 @@ def vllm_start_engine(
         max_model_len: int,
         tensor_parallel_size: int
 ) -> AsyncLLMEngine:
+    args = _get_args()
+    active_lora_path = args.lora_path
+    if active_lora_path != "":
+        enable_lora = True
+    else:
+        enable_lora = False
     engine_args = AsyncEngineArgs(
         model=model,
-        device="cuda",
+        # device="cuda",
         trust_remote_code=True,
         disable_log_stats=True,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
-        enable_lora=True,
+        enable_lora=enable_lora,
         enable_sleep_mode=True
     )
     engine = AsyncLLMEngine.from_engine_args(engine_args)

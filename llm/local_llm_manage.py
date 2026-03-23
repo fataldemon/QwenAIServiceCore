@@ -1,13 +1,10 @@
 import json
-import re
-import copy
+import os
 import random
 import datetime
 from fastapi import HTTPException
 
 import torch
-from transformers import AutoTokenizer
-from transformers.generation.logits_process import LogitsProcessorList
 from vllm import SamplingParams, AsyncEngineArgs, AsyncLLMEngine, TokensPrompt
 from vllm.lora.request import LoRARequest
 from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionRequest,
@@ -26,13 +23,12 @@ def vllm_start_engine(
 ) -> AsyncLLMEngine:
     engine_args = AsyncEngineArgs(
         model=model,
-        device="cuda",
         trust_remote_code=True,
         disable_log_stats=True,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
-        enable_lora=True,
+        # enable_lora=True,
         enable_sleep_mode=True
     )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
@@ -79,7 +75,10 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
             status_code=400,
             detail=f"Invalid request: Expecting at least one user message.",
         )
-    query = messages[-1].content
+    query = ""
+    for content in messages[-1].content:
+        if content.get("type") == "text":
+            query += content.get("text")
 
     # Embedding Process For Request
     if on_embedding and query != _TEXT_COMPLETION_CMD:
@@ -100,9 +99,9 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         embeddings=embeddings
     )
     system = setting + REPLY_INSTRUCTION
-    history = [{"role": "system", "content": system}]
+    history = [{"role": "system", "content": [{"type": "text", "text": system}]}]
     for message in messages[:-1]:
-        history.append({"role": message.role, "content": message.content})
+        history.append({"role": message.role, "content": [{"type": "text", "text": message.content}]})
     return query, history, embedding_list
 
 
@@ -130,7 +129,7 @@ def parse_response(response):
             thought=thought,
             message=ChatMessage(
                 role="assistant",
-                content=response,
+                content=[{"type": "text", "text": response}],
                 function_call={"name": func_name, "arguments": func_args},
             ),
             finish_reason="function_call",
@@ -139,7 +138,7 @@ def parse_response(response):
         choice_data = ChatCompletionResponseChoice(
             index=0,
             thought=thought,
-            message=ChatMessage(role="assistant", content=response),
+            message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
             finish_reason="stop",
         )
     return choice_data
@@ -150,33 +149,56 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
                         active_lora_path: str, tools=None) -> str:
     if tools is None:
         tools = []
-    input_ids = tokenizer.apply_chat_template(
+    # input_ids = tokenizer.apply_chat_template(
+    #     messages,
+    #     tokenize=True,
+    #     tools=tools,
+    #     add_generation_prompt=True,
+    #     enable_thinking=True
+    # )
+    # 处理多模态输入
+    processed = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
         tools=tools,
         add_generation_prompt=True,
-        enable_thinking=True
+        enable_thinking=True,
+        return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
     )
+
+    # 提取 token ids 和多模态数据
+    input_ids = processed["input_ids"][0]
+    pixel_values = processed.get("pixel_values")  # 可能需要转换为 tensor
+
+    # 构建 vLLM 输入
+    inputs = {
+        "prompt_token_ids": input_ids,
+    }
+    if pixel_values is not None:
+        inputs["multi_modal_data"] = {"image": pixel_values}  # 根据模型调整键名
+
     print(f">>>Input Tokens: {len(input_ids)} tokens")
     sampling_params = SamplingParams(
         **gen_kwargs,
         max_tokens=max_tokens,
-        stop_token_ids=[tokenizer.eos_token_id]
+        # stop_token_ids=[tokenizer.eos_token_id]
     )
     timestamp = datetime.datetime.now()
     request_id = f"{timestamp.strftime("%Y%m%d%H%M%S")}{random.randint(1, 1000)}"
     # 没有Lora路径时调用原生模型
     if active_lora_path != "":
         result_generator = engine.generate(
-            prompt=TokensPrompt(prompt_token_ids=input_ids),
+            # prompt=TokensPrompt(prompt_token_ids=input_ids),
+            prompt = inputs,
             # inputs={"prompt_token_ids": input_ids},
             sampling_params=sampling_params,
             request_id=request_id,
-            lora_request=LoRARequest(lora_name="alice", lora_int_id=1, lora_path=active_lora_path)
+            lora_request=LoRARequest(lora_name="alice", lora_int_id=1, lora_path=active_lora_path),
         )
     else:
         result_generator = engine.generate(
-            prompt=TokensPrompt(prompt_token_ids=input_ids),
+            # prompt=TokensPrompt(prompt_token_ids=input_ids),
+            prompt=inputs,
             # prompt=TokensPrompt(prompt_token_ids=input_ids),
             # inputs={"prompt_token_ids": input_ids},
             sampling_params=sampling_params,
@@ -242,7 +264,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought="",
-        message=ChatMessage(role="assistant", content=response),
+        message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
         finish_reason="stop",
     )
     return choice_data
@@ -275,7 +297,7 @@ async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatComple
         embeddings_buffer=request.embeddings_buffer
     )
 
-    messages = history + [{"role": "user", "content": query}]
+    messages = history + [{"role": "user", "content": [{"type": "text", "text": query}]}]
 
     response = await vllm_generate(
         engine,
@@ -298,16 +320,16 @@ async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatComple
         choice_data = ChatCompletionResponseChoice(
             index=index,
             thought="",
-            message=ChatMessage(role="assistant", content=response),
+            message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
             finish_reason="stop",
         )
 
     # Embedding Process For Answer
     if request.on_embedding:
         # emotion processing
-        content, emotion = remove_emotion(choice_data.message.content)
+        content, emotion = remove_emotion(choice_data.message.content[0].get("text"))
         emotion_checked = check_emotion(emotion, request.character)
-        choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
+        choice_data.message.content[0]["text"] = choice_data.message.content[0]["text"].replace(emotion, emotion_checked)
         # action processing
         content, actions = remove_action(content)
         result, result_list = vector_search(

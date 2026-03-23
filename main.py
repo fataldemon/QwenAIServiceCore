@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoProcessor
 
 from llm.local_llm_manage import vllm_start_engine, chat, chat_on_setting
 from models.base import (ModelCard, ModelList, ChatCompletionRequest,
@@ -139,7 +139,8 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
 if __name__ == "__main__":
     args = _get_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(
+    # tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer = AutoProcessor.from_pretrained(
         args.checkpoint_path,
     )
 

@@ -18,15 +18,21 @@ class ModelList(BaseModel):
     data: List[ModelCard] = []
 
 
+class MultimodalContent(BaseModel):
+    type: Literal["text", "image"]
+    text: Optional[str] = None
+    image: Optional[str] = None
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system", "function"]
-    content: Optional[str]
+    content: Optional[List[Dict]]
     function_call: Optional[Dict] = None
 
 
 class DeltaMessage(BaseModel):
     role: Optional[Literal["user", "assistant", "system"]] = None
-    content: Optional[str] = None
+    content: Optional[List[Dict]] = None
 
 
 class ChatCompletionRequest(BaseModel):
