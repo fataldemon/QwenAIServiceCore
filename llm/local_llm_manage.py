@@ -12,7 +12,9 @@ from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionReques
 from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
                                  add_knowledge)
 from utils.utils import get_function_description, remove_action, remove_emotion, StopWordsLogitsProcessor
-from template import SETTING, REPLY_INSTRUCTION, _TEXT_COMPLETION_CMD, _get_args
+from utils.image_processor import process_message
+from template import SETTING, REPLY_INSTRUCTION, IMAGE_SETTING, _TEXT_COMPLETION_CMD, _get_args
+from PIL import Image
 
 
 def vllm_start_engine(
@@ -99,7 +101,9 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         embeddings=embeddings
     )
     system = setting + REPLY_INSTRUCTION
-    history = [{"role": "system", "content": [{"type": "text", "text": system}]}]
+    history = [
+        {"role": "system", "content": [{"type": "text", "text": system}]}
+    ]
     for message in messages[:-1]:
         history.append({"role": message.role, "content": [{"type": "text", "text": message.content}]})
     return query, history, embedding_list
@@ -189,7 +193,7 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
     if active_lora_path != "":
         result_generator = engine.generate(
             # prompt=TokensPrompt(prompt_token_ids=input_ids),
-            prompt = inputs,
+            prompt=inputs,
             # inputs={"prompt_token_ids": input_ids},
             sampling_params=sampling_params,
             request_id=request_id,
