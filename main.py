@@ -74,11 +74,11 @@ app.add_middleware(
 #
 @app.post("/v1/assistant/completions", response_model=ChatCompletionResponse)
 async def completion_without_lora(request: ChatCompletionRequest):
-    global tokenizer
+    global autoProcessor
 
     choice_data = await chat(
         engine=engine,
-        tokenizer=tokenizer,
+        autoProcessor=autoProcessor,
         request=request,
         max_tokens=3000
     )
@@ -89,11 +89,11 @@ async def completion_without_lora(request: ChatCompletionRequest):
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest):
-    global tokenizer, engine
+    global autoProcessor, engine
 
     choice_data = await chat_on_setting(
         engine=engine,
-        tokenizer=tokenizer,
+        autoProcessor=autoProcessor,
         max_tokens=600,
         request=request,
         active_lora_path=args.lora_path,
@@ -109,7 +109,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
 @app.websocket("/ws/{ws_mode}")
 async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取值为"text"和"binary"
-    global tokenizer, engine
+    global autoProcessor, engine
 
     await websocket_manager.connect(websocket)
     try:
@@ -121,7 +121,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_mode取�
 
                 choice_data = await chat_on_setting(
                     engine=engine,
-                    tokenizer=tokenizer,
+                    autoProcessor=autoProcessor,
                     max_tokens=600,
                     request=request,
                     active_lora_path=args.lora_path,
@@ -140,7 +140,7 @@ if __name__ == "__main__":
     args = _get_args()
 
     # tokenizer = AutoTokenizer.from_pretrained(
-    tokenizer = AutoProcessor.from_pretrained(
+    autoProcessor = AutoProcessor.from_pretrained(
         args.checkpoint_path,
     )
 

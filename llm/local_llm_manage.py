@@ -12,9 +12,8 @@ from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionReques
 from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
                                  add_knowledge)
 from utils.utils import get_function_description, remove_action, remove_emotion, StopWordsLogitsProcessor
-from utils.image_processor import process_message
+from utils.image_processor import process_messages
 from template import SETTING, REPLY_INSTRUCTION, IMAGE_SETTING, _TEXT_COMPLETION_CMD, _get_args
-from PIL import Image
 
 
 def vllm_start_engine(
@@ -71,7 +70,7 @@ def add_extra_stop_words(stop_words):
 
 
 # 解析ReAct格式的请求数据
-def parse_messages(character, messages, on_embedding, information, embeddings_buffer):
+def parse_messages(character, messages, on_embedding, information, embeddings_buffer, images):
     if all(m.role != "user" for m in messages):
         raise HTTPException(
             status_code=400,
@@ -105,8 +104,9 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         {"role": "system", "content": [{"type": "text", "text": system}]}
     ]
     for message in messages[:-1]:
-        history.append({"role": message.role, "content": [{"type": "text", "text": message.content}]})
-    return query, history, embedding_list
+        history.append({"role": message.role, "content": message.content})
+    history, images = process_messages(history, images)
+    return query, history, embedding_list, images
 
 
 # 解析响应数据
@@ -149,43 +149,57 @@ def parse_response(response):
 
 
 # 调用LLMEngine进行推理
-async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_kwargs, max_tokens,
-                        active_lora_path: str, tools=None) -> str:
+async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list, gen_kwargs, max_tokens,
+                        active_lora_path: str, tools=None, images=None) -> str:
     if tools is None:
         tools = []
-    # input_ids = tokenizer.apply_chat_template(
-    #     messages,
-    #     tokenize=True,
-    #     tools=tools,
-    #     add_generation_prompt=True,
-    #     enable_thinking=True
-    # )
+
     # 处理多模态输入
-    processed = tokenizer.apply_chat_template(
+    text = autoProcessor.apply_chat_template(
         messages,
-        tokenize=True,
+        tokenize=False,
         tools=tools,
         add_generation_prompt=True,
         enable_thinking=True,
         return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
     )
+    if images and len(images) > 0:
+        processed = autoProcessor(
+            text=[text],
+            images=images,
+            return_tensors="pt"
+        )
+    else:
+        processed = autoProcessor(
+            text=[text],
+            return_tensors="pt"
+        )
+    # processed = autoProcessor.apply_chat_template(
+    #     messages,
+    #     tokenize=True,
+    #     tools=tools,
+    #     add_generation_prompt=True,
+    #     enable_thinking=True,
+    #     return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
+    # )
 
-    # 提取 token ids 和多模态数据
-    input_ids = processed["input_ids"][0]
-    pixel_values = processed.get("pixel_values")  # 可能需要转换为 tensor
+    # 提取 token ids
+    input_ids = processed["input_ids"][0].tolist()
 
     # 构建 vLLM 输入
     inputs = {
         "prompt_token_ids": input_ids,
     }
-    if pixel_values is not None:
-        inputs["multi_modal_data"] = {"image": pixel_values}  # 根据模型调整键名
+    if images:
+        inputs["multi_modal_data"] = {
+            "image": images
+        }
 
     print(f">>>Input Tokens: {len(input_ids)} tokens")
     sampling_params = SamplingParams(
         **gen_kwargs,
         max_tokens=max_tokens,
-        # stop_token_ids=[tokenizer.eos_token_id]
+        # stop_token_ids=[autoProcessor.eos_token_id]
     )
     timestamp = datetime.datetime.now()
     request_id = f"{timestamp.strftime("%Y%m%d%H%M%S")}{random.randint(1, 1000)}"
@@ -224,7 +238,7 @@ async def vllm_generate(engine: AsyncLLMEngine, tokenizer, messages: list, gen_k
     return response
 
 
-async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest,
+async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionRequest,
                max_tokens: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
@@ -246,7 +260,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     # 调用无Lora的大模型
     response = await vllm_generate(
         engine,
-        tokenizer,
+        autoProcessor,
         tools=tools,
         max_tokens=max_tokens,
         messages=message,
@@ -274,7 +288,7 @@ async def chat(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest
     return choice_data
 
 
-async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatCompletionRequest, max_tokens: int,
+async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionRequest, max_tokens: int,
                           active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
     gen_kwargs = {}
     if request.temperature is not None:
@@ -293,24 +307,32 @@ async def chat_on_setting(engine: AsyncLLMEngine, tokenizer, request: ChatComple
 
     stop_words = add_extra_stop_words(request.stop)
 
-    query, history, embedding_list = parse_messages(
+    # 图像存储区
+    images = []
+    query, history, embedding_list, images = parse_messages(
         character=request.character,
         messages=request.messages,
         on_embedding=request.on_embedding,
         information=request.information,
-        embeddings_buffer=request.embeddings_buffer
+        embeddings_buffer=request.embeddings_buffer,
+        images=images
     )
 
-    messages = history + [{"role": "user", "content": [{"type": "text", "text": query}]}]
+    message_formatted, images = process_messages(
+        messages=[{"role": "user", "content": [{"type": "text", "text": query}]}],
+        images=images
+    )
+    messages = history + message_formatted
 
     response = await vllm_generate(
         engine,
-        tokenizer,
+        autoProcessor,
         max_tokens=max_tokens,
         messages=messages,
         gen_kwargs=gen_kwargs,
         active_lora_path=active_lora_path,
-        tools=request.functions
+        tools=request.functions,
+        images=images
     )
 
     print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
