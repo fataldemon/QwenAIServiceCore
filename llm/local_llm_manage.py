@@ -104,7 +104,10 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         {"role": "system", "content": [{"type": "text", "text": system}]}
     ]
     for message in messages[:-1]:
-        history.append({"role": message.role, "content": message.content})
+        if message.role != "function":
+            history.append({"role": message.role, "content": message.content})
+        else:
+            history.append({"role": "tool", "content": message.content})
     history, images = process_messages(history, images)
     return query, history, embedding_list, images
 
@@ -149,7 +152,7 @@ def parse_response(response):
 
 # 调用LLMEngine进行推理
 async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[dict], gen_kwargs, max_tokens,
-                        active_lora_path: str, tools=None, images=None) -> str:
+                        active_lora_path: str, tools=None, images=None, enable_thinking=True) -> str:
     if tools is None:
         tools = []
 
@@ -159,7 +162,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
         tokenize=False,
         tools=tools,
         add_generation_prompt=True,
-        enable_thinking=True,
+        enable_thinking=enable_thinking,
         return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
     )
     if images and len(images) > 0:
@@ -262,7 +265,8 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         max_tokens=max_tokens,
         messages=message_formatted,
         gen_kwargs=gen_kwargs,
-        active_lora_path=""
+        active_lora_path="",
+        enable_thinking=False
     )
     print(f"Assistant:{response}")
     # 如果是知识点概要就存储
