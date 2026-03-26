@@ -94,7 +94,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     choice_data = await chat_on_setting(
         engine=engine,
         autoProcessor=autoProcessor,
-        max_tokens=600,
+        max_tokens=1000,
         request=request,
         active_lora_path=args.lora_path,
         index=0

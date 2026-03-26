@@ -11,7 +11,7 @@ from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionReques
                          ChatCompletionResponseChoice, ChatCompletionResponse)
 from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
                                  add_knowledge)
-from utils.utils import get_function_description, remove_action, remove_emotion, StopWordsLogitsProcessor
+from utils.utils import parse_tool_call, remove_action, remove_emotion, StopWordsLogitsProcessor
 from utils.image_processor import process_messages
 from template import SETTING, REPLY_INSTRUCTION, IMAGE_SETTING, _TEXT_COMPLETION_CMD, _get_args
 
@@ -117,17 +117,16 @@ def parse_response(response):
         response = resp_messages[1]
     else:
         thought = ""
-    if "\n\n<tool_call>\n" and "\n</tool_call>" in response:
+    # 工具调用处理
+    function_call = parse_tool_call(response)
+    if function_call is not None:
         tool_token = response.rfind("<tool_call>\n")
-        rev_tool_token = response.rfind("</tool_call>")
-        tool_call = response[tool_token + len("<tool_call>\n"):rev_tool_token]
         if tool_token == 0:
             response = ""
         else:
             response = response[:tool_token]
-        tool_json = json.loads(tool_call)
-        func_name = tool_json.get("name")
-        func_args = json.dumps(tool_json.get("arguments"))
+        func_name = function_call.get("name")
+        func_args = json.dumps(function_call.get("arguments"))
         choice_data = ChatCompletionResponseChoice(
             index=0,
             thought=thought,
@@ -149,7 +148,7 @@ def parse_response(response):
 
 
 # 调用LLMEngine进行推理
-async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list, gen_kwargs, max_tokens,
+async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[dict], gen_kwargs, max_tokens,
                         active_lora_path: str, tools=None, images=None) -> str:
     if tools is None:
         tools = []
@@ -174,14 +173,6 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list, g
             text=[text],
             return_tensors="pt"
         )
-    # processed = autoProcessor.apply_chat_template(
-    #     messages,
-    #     tokenize=True,
-    #     tools=tools,
-    #     add_generation_prompt=True,
-    #     enable_thinking=True,
-    #     return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
-    # )
 
     # 提取 token ids
     input_ids = processed["input_ids"][0].tolist()
@@ -257,13 +248,19 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
     message = request.messages
     tools = request.functions
     print(f"{message}")
+    # 图像存储区
+    images = []
+    message_formatted, images = process_messages(
+        messages=[{"role": message[0].role, "content": message[0].content}],
+        images=images
+    )
     # 调用无Lora的大模型
     response = await vllm_generate(
         engine,
         autoProcessor,
         tools=tools,
         max_tokens=max_tokens,
-        messages=message,
+        messages=message_formatted,
         gen_kwargs=gen_kwargs,
         active_lora_path=""
     )
@@ -272,10 +269,9 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
     print(f'Assistant Type: {request.type}')
     if request.type == 1:
         reply = response
-        if "<think>" in response and "</think>" in response:
-            index_t = response.rfind("</think>\n\n")
-            if index_t != -1:
-                reply = response[index_t + len("</think>\n\n"):]
+        if "</think>\n" in response:
+            resp_messages = response.split("</think>\n")
+            reply = resp_messages[1]
         add_knowledge(content=reply, character=request.character)
         print(f"Knowledge Saved: {response}")
 

@@ -1,22 +1,66 @@
 import re
+import os
+import hashlib
 import requests
 from PIL import Image
 from io import BytesIO
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
+
+# 缓存目录（项目根目录下）
+CACHE_DIR = "images_cache"
+
+
+def ensure_cache_dir():
+    """确保缓存目录存在"""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
 
 
 def open_image_from_url(url: str) -> Optional[Image.Image]:
     """
-    从给定的 URL 打开图像，返回 PIL.Image 对象。
-    如果请求失败或图像无效，返回 None。
+    从 URL 获取图像，优先使用本地缓存。
+    成功返回 PIL.Image 对象，失败返回 None。
     """
+    ensure_cache_dir()
+
+    # 计算 URL 的 MD5 作为缓存文件名
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_path = os.path.join(CACHE_DIR, url_hash)
+
+    # 尝试从缓存读取
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'rb') as f:
+                img_data = f.read()
+            img = Image.open(BytesIO(img_data))
+            return img
+        except Exception:
+            # 缓存文件损坏，删除后重新下载
+            try:
+                os.remove(cache_path)
+            except OSError:
+                pass  # 删除失败则继续下载
+
+    # 缓存不存在或损坏，执行下载
     try:
         response = requests.get(url, stream=True, timeout=5)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content))
+        img_data = response.content
+
+        # 检查是否为有效图像（通过尝试打开）
+        img = Image.open(BytesIO(img_data))
+
+        # 保存到缓存
+        try:
+            with open(cache_path, 'wb') as f:
+                f.write(img_data)
+        except Exception:
+            # 缓存写入失败不影响结果，只记录（不抛出异常）
+            pass
+
+        return img
     except Exception:
-        print(f"请求图像失败，URL={url}")
-        # 任何错误（网络、解析、超时等）都返回 None
+        # 任何下载或图像解析错误都返回 None
         return None
 
 
@@ -32,7 +76,6 @@ def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
         一个片段列表，每个片段是一个字典，类型为 "text" 或 "image"。
     """
     pattern = re.compile(r'\[image,url=([^\]]+)\]')
-    # 分割文本，保留占位符
     parts = re.split(r'(\[image,url=[^\]]+\])', text)
 
     segments = []
@@ -44,14 +87,11 @@ def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
             url = match.group(1)
             img = open_image_from_url(url)
             if img is not None:
-                # 成功加载：追加到图像列表并生成图像片段
                 images.append(img)
                 segments.append({"type": "image", "image": img})
             else:
-                # 加载失败：插入占位文本
                 segments.append({"type": "text", "text": "[发送了一张图片]"})
         else:
-            # 普通文本片段
             segments.append({"type": "text", "text": part})
     return segments
 
@@ -63,6 +103,7 @@ def process_messages(
     """
     处理消息列表，提取其中的图像占位符并尝试转换为 PIL.Image 对象。
     失败的图像会被替换为 "[发送了一张图片]" 文本。
+    已成功加载的图像会使用本地缓存，避免重复下载。
 
     参数:
         messages: 输入消息列表，每条消息格式为:
@@ -76,13 +117,11 @@ def process_messages(
     """
     if images is None:
         images = []
-    # 创建新列表，避免修改原始列表（如果希望直接修改原列表，可以去掉复制）
     new_images = list(images)
 
     new_messages = []
     for msg in messages:
         new_msg = {"role": msg["role"]}
-        # 复制其他可能存在的键
         for k, v in msg.items():
             if k != "content":
                 new_msg[k] = v
@@ -96,7 +135,6 @@ def process_messages(
                 segments = process_text(text, new_images)
                 new_content.extend(segments)
             else:
-                # 非文本块（如图像）直接保留
                 new_content.append(item)
 
         new_msg["content"] = new_content
@@ -112,7 +150,7 @@ if __name__ == "__main__":
             "role": "user",
             "content": [
                 {"type": "text",
-                 "text": "Hello [image,url=https://example.com/1.jpg] world [image,url=https://invalid.url]!"}
+                 "text": "Hello [image,url=https://example.com/1.jpg] world [image,url=https://example.com/1.jpg] again!"}
             ]
         },
         {

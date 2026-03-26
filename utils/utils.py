@@ -118,6 +118,31 @@ class StopWordsLogitsProcessor(LogitsProcessor):
         return stopped_samples
 
 
+def parse_tool_call(text: str):
+    tool_call_pattern = r'<tool_call>(.*?)</tool_call>'
+    match = re.search(tool_call_pattern, text, re.DOTALL)
+    if not match:
+        return None
+    content = match.group(1)
+
+    # 提取函数名
+    func_match = re.search(r'<function=([^>]+)>(.*?)</function>', content, re.DOTALL)
+    if not func_match:
+        return None
+    func_name = func_match.group(1).strip()
+    func_body = func_match.group(2)
+
+    # 提取参数
+    param_pattern = r'<parameter=([^>]+)>(.*?)</parameter>'
+    params = {}
+    for param_match in re.finditer(param_pattern, func_body, re.DOTALL):
+        param_name = param_match.group(1).strip()
+        param_value = param_match.group(2).strip()
+        params[param_name] = param_value
+
+    return {"name": func_name, "arguments": params}
+
+
 def get_function_description(function: Dict, lang: Literal['en', 'zh']) -> str:
     """
     Text description of function
