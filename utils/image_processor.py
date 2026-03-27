@@ -8,12 +8,36 @@ from typing import List, Dict, Any, Optional
 
 # 缓存目录（项目根目录下）
 CACHE_DIR = "images_cache"
+# 本地图片根目录（相对于项目根目录）
+LOCAL_IMAGE_DIR = os.path.join("embedding", "tendou_arisu", "image")
 
 
 def ensure_cache_dir():
     """确保缓存目录存在"""
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR)
+
+
+def open_image_from_local(filename: str) -> Optional[Image.Image]:
+    """
+    从本地固定目录读取图片。
+    :param filename: 文件名（例如 "example.jpg"）
+    :return: PIL.Image 对象，失败返回 None
+    """
+    # 构建完整路径
+    file_path = os.path.join(LOCAL_IMAGE_DIR, filename)
+
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        return None
+
+    try:
+        # 打开并返回图片
+        img = Image.open(file_path)
+        return img
+    except Exception:
+        # 图片格式错误或无法打开
+        return None
 
 
 def open_image_from_url(url: str) -> Optional[Image.Image]:
@@ -71,31 +95,50 @@ def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
     """
     处理一个文本字符串，将其中的图像占位符替换为图像片段或占位文本。
 
+    支持的占位符格式：
+        - [image,url=...]  网络图片，从 URL 下载
+        - [image,file=...] 本地图片，从固定目录读取
+
     参数:
-        text: 原始文本字符串，可能包含形如 [image,url={url}] 的占位符。
-        images: 当前图像列表（会被修改，仅成功加载的图像会追加）。
+        text: 原始文本字符串
+        images: 当前图像列表（会被修改，仅成功加载的图像会追加）
 
     返回:
         一个片段列表，每个片段是一个字典，类型为 "text" 或 "image"。
     """
-    pattern = re.compile(r'\[image,url=([^\]]+)\]')
-    parts = re.split(r'(\[image,url=[^\]]+\])', text)
-
+    # 匹配两种格式，捕获类型和值
+    pattern = re.compile(r'\[image,(?P<type>url|file)=(?P<value>[^\]]+)\]')
     segments = []
-    for part in parts:
-        if not part:
-            continue
-        match = pattern.fullmatch(part)
-        if match:
-            url = match.group(1)
-            img = open_image_from_url(url)
-            if img is not None:
-                images.append(img)
-                segments.append({"type": "image", "image": img})
-            else:
-                segments.append({"type": "text", "text": "[发送了一张图片]"})
+    last_end = 0
+
+    for match in pattern.finditer(text):
+        # 添加匹配之前的文本片段
+        start, end = match.span()
+        if start > last_end:
+            segments.append({"type": "text", "text": text[last_end:start]})
+
+        # 处理占位符
+        img_type = match.group("type")
+        value = match.group("value")
+        img = None
+
+        if img_type == "url":
+            img = open_image_from_url(value)
+        else:  # file
+            img = open_image_from_local(value)
+
+        if img is not None:
+            images.append(img)
+            segments.append({"type": "image", "image": img})
         else:
-            segments.append({"type": "text", "text": part})
+            segments.append({"type": "text", "text": "[发送了一张图片]"})
+
+        last_end = end
+
+    # 添加剩余的文本
+    if last_end < len(text):
+        segments.append({"type": "text", "text": text[last_end:]})
+
     return segments
 
 
@@ -154,14 +197,14 @@ if __name__ == "__main__":
             "content": [
                 {"type": "text",
                  "text": "（老师对爱丽丝说）我发了几张图片"
-                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQhmeQBFNO8tUpC0cNpPDKAll3NiBjNgQwg_wooqqOj3pS9kwMyBHByb2RQgL2jAVoQ-Oa8-P12r7-yDEL60siT3noCsz2CAQJneg&spec=0&rkey=CAMSML24x5qpVNQXhWWEl7S6nk4BFUK_OHfDqmjMcOEvwo5isHUbMLuZgVx2RS5fLCQJGQ]"
-                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSGsn6_v0d_AfOa6jnmSGk6YNqkmRix0Qsg_woo4-em3pS9kwMyBHByb2RQgL2jAVoQId1LlJqkK6gzdofOOQZu13oCBvuCAQJneg&spec=0&rkey=CAMSML24x5qpVNQXhWWEl7S6nk4BFUK_OHfDqmjMcOEvwo5isHUbMLuZgVx2RS5fLCQJGQ]"}
+                         "[image,url=https://cdnimg-v2.gamekee.com/wiki2.0/images/w_1886/h_2366/829/399789/2026/1/26/809952.png]"
+                         "[image,file=Arisu_00.png]"}
             ]
         },
         {
             "role": "assistant",
             "content": [
-                {"type": "text", "text": "Here is another image: [image,url=https://cdnimg-v2.gamekee.com/wiki2.0/images/w_1886/h_2366/829/399789/2026/1/26/809952.png]"}
+                {"type": "text", "text": "Here is another image: [image,file=saiba-midori-saiba-momoi.jpg]"}
             ]
         }
     ]
