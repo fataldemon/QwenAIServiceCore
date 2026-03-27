@@ -47,6 +47,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = None
     max_length: Optional[int] = None
     stream: Optional[bool] = False
+    enable_thinking: Optional[bool] = True
     stop: Optional[List[str]] = None
     embeddings_buffer: Optional[List[int]] = []
     on_embedding: Optional[bool] = True

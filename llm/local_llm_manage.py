@@ -11,7 +11,7 @@ from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionReques
                          ChatCompletionResponseChoice, ChatCompletionResponse)
 from embedding.embedding import (process_embedding, vector_search, reorganize_index, check_emotion,
                                  add_knowledge)
-from utils.utils import parse_tool_call, remove_action, remove_emotion, StopWordsLogitsProcessor
+from utils.utils import parse_tool_call, remove_action, remove_emotion, remove_trailing_hint
 from utils.image_processor import process_messages
 from template import SETTING, REPLY_INSTRUCTION, IMAGE_SETTING, _TEXT_COMPLETION_CMD, _get_args
 
@@ -20,18 +20,30 @@ def vllm_start_engine(
         model: str,
         gpu_memory_utilization: float,
         max_model_len: int,
-        tensor_parallel_size: int
+        tensor_parallel_size: int,
+        enable_lora: False
 ) -> AsyncLLMEngine:
-    engine_args = AsyncEngineArgs(
-        model=model,
-        trust_remote_code=True,
-        disable_log_stats=True,
-        gpu_memory_utilization=gpu_memory_utilization,
-        max_model_len=max_model_len,
-        tensor_parallel_size=tensor_parallel_size,
-        # enable_lora=True,
-        enable_sleep_mode=True
-    )
+    if not enable_lora:
+        engine_args = AsyncEngineArgs(
+            model=model,
+            trust_remote_code=True,
+            disable_log_stats=True,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_model_len=max_model_len,
+            tensor_parallel_size=tensor_parallel_size,
+            enable_sleep_mode=True
+        )
+    else:
+        engine_args = AsyncEngineArgs(
+            model=model,
+            trust_remote_code=True,
+            disable_log_stats=True,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_model_len=max_model_len,
+            tensor_parallel_size=tensor_parallel_size,
+            enable_lora=True,
+            enable_sleep_mode=True
+        )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine
 
@@ -85,22 +97,23 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
     if on_embedding and query != _TEXT_COMPLETION_CMD:
         content, actions = remove_action(query)
         embeddings, embedding_list = process_embedding(
-            content=content,
+            content=remove_trailing_hint(content),
             top_k=3,
             character=character,
             client_buffer=embeddings_buffer,
-            max_length=7
+            max_length=7,
+            client_information=information
         )
     else:
-        embeddings = ""
+        embeddings = information
         embedding_list = []
 
     setting = SETTING.format(
-        embeddings=information
+        embeddings=embeddings
     )
     system = setting + REPLY_INSTRUCTION
     history = [{"role": "system", "content": [{"type": "text", "text": system}]},
-               {"role": "user", "content": [{"type": "text", "text": f"{IMAGE_SETTING}\n{embeddings}"}]}]
+               {"role": "user", "content": [{"type": "text", "text": IMAGE_SETTING}]}]
     for message in messages[:-1]:
         if message.role != "function":
             history.append({"role": message.role, "content": message.content})
@@ -259,6 +272,10 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         messages=[{"role": message[0].role, "content": message[0].content}],
         images=images
     )
+    if type == 0:
+        enable_thinking = True
+    else:
+        enable_thinking = False
     # 调用无Lora的大模型
     response = await vllm_generate(
         engine,
@@ -268,7 +285,7 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         messages=message_formatted,
         gen_kwargs=gen_kwargs,
         active_lora_path="",
-        enable_thinking=False
+        enable_thinking=enable_thinking
     )
     print(f"Assistant:{response}")
     # 如果是知识点概要就存储
@@ -336,7 +353,8 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         gen_kwargs=gen_kwargs,
         active_lora_path=active_lora_path,
         tools=request.functions,
-        images=images
+        images=images,
+        enable_thinking=request.enable_thinking
     )
 
     print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")

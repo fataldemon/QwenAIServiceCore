@@ -36,6 +36,24 @@ def remove_action(line: str) -> tuple[str, list[str]]:
         return line, match
 
 
+def remove_trailing_hint(text: str) -> str:
+    """
+    删除文段末尾的提示内容，格式为“（提示：...）”。
+    提示内容只删除一次，且仅当它位于文段末尾（允许尾部空白）。
+
+    参数:
+        text: 输入字符串
+
+    返回:
+        删除末尾提示后的字符串（如果存在提示），否则原样返回。
+    """
+    # 匹配末尾的中文括号内以“提示：”开头的内容，允许尾部空白
+    pattern = r'（提示：.*）\s*$'
+    # 使用 re.DOTALL 使 . 匹配换行（跨行提示也能匹配）
+    cleaned = re.sub(pattern, '', text, flags=re.DOTALL)
+    return cleaned
+
+
 class StopWordsLogitsProcessor(LogitsProcessor):
     """
     :class:`transformers.LogitsProcessor` that enforces that when specified sequences appear, stop geration.

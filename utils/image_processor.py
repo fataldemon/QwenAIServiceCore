@@ -197,7 +197,7 @@ if __name__ == "__main__":
             "content": [
                 {"type": "text",
                  "text": "（老师对爱丽丝说）我发了几张图片"
-                         "[image,url=https://cdnimg-v2.gamekee.com/wiki2.0/images/w_1886/h_2366/829/399789/2026/1/26/809952.png]"
+                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhR_ayMnShcGVQPOQTMKHfh54aNkPxjavysg_woo6K6y8--_kwMyBHByb2RQgL2jAVoQf6Ti2Q5jv-irQV0FhNBBLHoCxoCCAQJneg&spec=0&rkey=CAQSMIYIOjzrxb3eTCVG5osnrvoCVRkVzu0Kfso8iV7HfsZBtCTWi9LdV0dRUCu6EDOMOw]"
                          "[image,file=Arisu_00.png]"}
             ]
         },

@@ -143,6 +143,7 @@ if __name__ == "__main__":
     autoProcessor = AutoProcessor.from_pretrained(
         args.checkpoint_path,
     )
+    enable_lora = False if args.lora_path == "" else True
 
     if args.api_auth:
         app.add_middleware(
@@ -153,7 +154,8 @@ if __name__ == "__main__":
         model=args.checkpoint_path,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_model_len=args.max_model_len,
-        tensor_parallel_size=1
+        tensor_parallel_size=1,
+        enable_lora=enable_lora
     )
 
     uvicorn.run(app, host=args.server_name, port=args.server_port, workers=1)
