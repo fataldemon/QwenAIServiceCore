@@ -44,6 +44,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = None
     top_k: Optional[int] = None
     repetition_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
     max_length: Optional[int] = None
     stream: Optional[bool] = False
     stop: Optional[List[str]] = None

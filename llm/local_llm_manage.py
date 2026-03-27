@@ -228,6 +228,8 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
         speed = out_tokens / time_cost
     print(
         f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
+    if out_tokens >= max_tokens:
+        response = "（陷入了自己无尽的思绪中不能自拔了）......"
 
     return response
 
@@ -247,6 +249,8 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         gen_kwargs['top_k'] = request.top_k
     if request.repetition_penalty is not None:
         gen_kwargs['repetition_penalty'] = request.repetition_penalty
+    if request.presence_penalty is not None:
+        gen_kwargs['presence_penalty'] = request.presence_penalty
 
     message = request.messages
     tools = request.functions
@@ -303,6 +307,8 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         gen_kwargs['top_k'] = request.top_k
     if request.repetition_penalty is not None:
         gen_kwargs['repetition_penalty'] = request.repetition_penalty
+    if request.presence_penalty is not None:
+        gen_kwargs['presence_penalty'] = request.presence_penalty
     print(f">>>Tools to Call: {request.functions}")
 
     stop_words = add_extra_stop_words(request.stop)

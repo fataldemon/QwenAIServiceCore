@@ -40,7 +40,10 @@ active_lora_path = ""
 # embedding_model = "intfloat/multilingual-e5-large-instruct"
 embedding_model = "DMetaSoul/Dmeta-embedding"
 gpu_memory_utilization = 0.75
-max_model_len = 15000
+max_model_len = 24000
+max_chat_len = 1200
+max_analysis_len = 3000
+max_quick_reply = 600
 
 
 def _get_args():

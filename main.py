@@ -13,7 +13,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from llm.local_llm_manage import vllm_start_engine, chat, chat_on_setting
 from models.base import (ModelCard, ModelList, ChatCompletionRequest,
                          ChatCompletionResponse)
-from template import _get_args
+from template import _get_args, max_chat_len, max_analysis_len, max_quick_reply
 from utils.websocketutils import WebsocketManager
 
 
@@ -80,7 +80,7 @@ async def completion_without_lora(request: ChatCompletionRequest):
         engine=engine,
         autoProcessor=autoProcessor,
         request=request,
-        max_tokens=3000
+        max_tokens=max_analysis_len
     )
     return ChatCompletionResponse(
         model=request.model, choices=[choice_data], object="chat.completion"
@@ -94,7 +94,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     choice_data = await chat_on_setting(
         engine=engine,
         autoProcessor=autoProcessor,
-        max_tokens=1000,
+        max_tokens=max_chat_len,
         request=request,
         active_lora_path=args.lora_path,
         index=0
@@ -122,7 +122,7 @@ async def websocket_endpoint(ws_mode: str, websocket: WebSocket):  # ws_modeÂèñÂ
                 choice_data = await chat_on_setting(
                     engine=engine,
                     autoProcessor=autoProcessor,
-                    max_tokens=600,
+                    max_tokens=max_quick_reply,
                     request=request,
                     active_lora_path=args.lora_path,
                     index=1

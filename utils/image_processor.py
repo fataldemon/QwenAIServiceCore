@@ -150,13 +150,15 @@ if __name__ == "__main__":
             "role": "user",
             "content": [
                 {"type": "text",
-                 "text": "Hello [image,url=https://example.com/1.jpg] world [image,url=https://example.com/1.jpg] again!"}
+                 "text": "（老师对爱丽丝说）我发了几张图片"
+                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQhmeQBFNO8tUpC0cNpPDKAll3NiBjNgQwg_wooqqOj3pS9kwMyBHByb2RQgL2jAVoQ-Oa8-P12r7-yDEL60siT3noCsz2CAQJneg&spec=0&rkey=CAMSML24x5qpVNQXhWWEl7S6nk4BFUK_OHfDqmjMcOEvwo5isHUbMLuZgVx2RS5fLCQJGQ]"
+                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSGsn6_v0d_AfOa6jnmSGk6YNqkmRix0Qsg_woo4-em3pS9kwMyBHByb2RQgL2jAVoQId1LlJqkK6gzdofOOQZu13oCBvuCAQJneg&spec=0&rkey=CAMSML24x5qpVNQXhWWEl7S6nk4BFUK_OHfDqmjMcOEvwo5isHUbMLuZgVx2RS5fLCQJGQ]"}
             ]
         },
         {
             "role": "assistant",
             "content": [
-                {"type": "text", "text": "Here is an image: [image,url=https://example.com/2.jpg]"}
+                {"type": "text", "text": "Here is another image: [image,url=https://example.com/2.jpg]"}
             ]
         }
     ]
