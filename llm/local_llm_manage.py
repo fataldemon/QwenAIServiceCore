@@ -88,21 +88,19 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
             content=content,
             top_k=3,
             character=character,
-            client_information=information,
             client_buffer=embeddings_buffer,
             max_length=7
         )
     else:
-        embeddings = information
+        embeddings = ""
         embedding_list = []
 
     setting = SETTING.format(
-        embeddings=embeddings
+        embeddings=information
     )
     system = setting + REPLY_INSTRUCTION
-    history = [
-        {"role": "system", "content": [{"type": "text", "text": system}]}
-    ]
+    history = [{"role": "system", "content": [{"type": "text", "text": system}]},
+               {"role": "user", "content": [{"type": "text", "text": f"{IMAGE_SETTING}\n{embeddings}"}]}]
     for message in messages[:-1]:
         if message.role != "function":
             history.append({"role": message.role, "content": message.content})
@@ -229,7 +227,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     print(
         f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
     if out_tokens >= max_tokens:
-        response = "（陷入了自己无尽的思绪中不能自拔了）......"
+        response = "【思考】（沉浸在自己的思绪中......）[SILENCE]"
 
     return response
 

@@ -43,7 +43,10 @@ def open_image_from_url(url: str) -> Optional[Image.Image]:
 
     # 缓存不存在或损坏，执行下载
     try:
-        response = requests.get(url, stream=True, timeout=5)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, stream=True, timeout=5)
         response.raise_for_status()
         img_data = response.content
 
@@ -158,7 +161,7 @@ if __name__ == "__main__":
         {
             "role": "assistant",
             "content": [
-                {"type": "text", "text": "Here is another image: [image,url=https://example.com/2.jpg]"}
+                {"type": "text", "text": "Here is another image: [image,url=https://cdnimg-v2.gamekee.com/wiki2.0/images/w_1886/h_2366/829/399789/2026/1/26/809952.png]"}
             ]
         }
     ]

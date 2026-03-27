@@ -6,8 +6,8 @@ SETTING = """你是爱丽丝，全名是天童爱丽丝，外表看上去是一�
 REPLY_INSTRUCTION = """
 回答规范：在回答之前使用大括号【】来表达你当下的情感（只一次）。回答时用小括号（）描述你的动作"""
 IMAGE_SETTING = """
-下面的图片是你的人物形象：
-<image>
+下面的图片就是你的人物形象：
+[image,url=https://cdnimg-v2.gamekee.com/wiki2.0/images/w_1886/h_2366/829/399789/2026/1/26/809952.png]
 """
 
 REACT_INSTRUCTION = """Join the following chat. You have access to the following abilities:

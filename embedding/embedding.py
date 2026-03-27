@@ -233,8 +233,8 @@ def reorganize_index(base_list: list[int], append_list: list[int], max_length: i
     return base_list[-max_length:]
 
 
-def process_embedding(content: str, top_k: int, character: str, client_information: str,
-                      client_buffer: list[int], max_length: int) -> tuple:
+def process_embedding(content: str, top_k: int, character: str,
+                      client_buffer: list[int], max_length: int, client_information: str = "",) -> tuple:
     search_result, server_embedding_index_list = vector_search(
         question=content,
         character=character,
