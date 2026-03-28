@@ -190,6 +190,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
 
     # 提取 token ids
     input_ids = processed["input_ids"][0].tolist()
+    print(f">>>Input Tokens: {len(input_ids)} tokens")
 
     # 构建 vLLM 输入
     inputs = {
@@ -200,7 +201,6 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
             "image": images
         }
 
-    print(f">>>Input Tokens: {len(input_ids)} tokens")
     sampling_params = SamplingParams(
         **gen_kwargs,
         max_tokens=max_tokens,
