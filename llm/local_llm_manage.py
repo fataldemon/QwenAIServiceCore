@@ -168,38 +168,19 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
         tools = []
 
     # 处理多模态输入
-    text = autoProcessor.apply_chat_template(
+    input_texts = autoProcessor.apply_chat_template(
         messages,
         tokenize=False,
         tools=tools,
         add_generation_prompt=True,
         enable_thinking=enable_thinking,
-        return_dict=True,  # 关键：让处理器返回字典，包含所有必要字段
+        return_dict=True
     )
-    if images and len(images) > 0:
-        processed = autoProcessor(
-            text=[text],
-            images=images,
-            return_tensors="pt"
-        )
-    else:
-        processed = autoProcessor(
-            text=[text],
-            return_tensors="pt"
-        )
-
-    # 提取 token ids
-    input_ids = processed["input_ids"][0].tolist()
-    print(f">>>Input Tokens: {len(input_ids)} tokens")
 
     # 构建 vLLM 输入
-    inputs = {
-        "prompt_token_ids": input_ids,
-    }
+    prompt = {"prompt": input_texts}
     if images:
-        inputs["multi_modal_data"] = {
-            "image": images
-        }
+        prompt["multi_modal_data"] = {"image": images}
 
     sampling_params = SamplingParams(
         **gen_kwargs,
@@ -212,7 +193,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     if active_lora_path != "":
         result_generator = engine.generate(
             # prompt=TokensPrompt(prompt_token_ids=input_ids),
-            prompt=inputs,
+            prompt=prompt,
             # inputs={"prompt_token_ids": input_ids},
             sampling_params=sampling_params,
             request_id=request_id,
@@ -221,7 +202,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     else:
         result_generator = engine.generate(
             # prompt=TokensPrompt(prompt_token_ids=input_ids),
-            prompt=inputs,
+            prompt=prompt,
             # prompt=TokensPrompt(prompt_token_ids=input_ids),
             # inputs={"prompt_token_ids": input_ids},
             sampling_params=sampling_params,
@@ -230,6 +211,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     final_result = None
     async for result in result_generator:
         final_result = result
+    print(f">>>Input Text Tokens: {len(final_result.prompt_token_ids)} tokens")
     response = final_result.outputs[0].text
     # 计算吞吐量
     time_cost = (datetime.datetime.now() - timestamp).total_seconds()

@@ -91,9 +91,10 @@ def open_image_from_url(url: str) -> Optional[Image.Image]:
         return None
 
 
-def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
+def process_text(text: str, images: List[Image.Image]) -> str:
     """
-    处理一个文本字符串，将其中的图像占位符替换为图像片段或占位文本。
+    处理一个文本字符串，将其中的图像占位符替换为 "Me" 文本。
+    成功加载的图片会追加到 images 列表中。
 
     支持的占位符格式：
         - [image,url=...]  网络图片，从 URL 下载
@@ -104,20 +105,11 @@ def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
         images: 当前图像列表（会被修改，仅成功加载的图像会追加）
 
     返回:
-        一个片段列表，每个片段是一个字典，类型为 "text" 或 "image"。
+        替换后的文本字符串
     """
-    # 匹配两种格式，捕获类型和值
     pattern = re.compile(r'\[image,(?P<type>url|file)=(?P<value>[^\]]+)\]')
-    segments = []
-    last_end = 0
 
-    for match in pattern.finditer(text):
-        # 添加匹配之前的文本片段
-        start, end = match.span()
-        if start > last_end:
-            segments.append({"type": "text", "text": text[last_end:start]})
-
-        # 处理占位符
+    def replacer(match):
         img_type = match.group("type")
         value = match.group("value")
         img = None
@@ -129,17 +121,12 @@ def process_text(text: str, images: List[Image.Image]) -> List[Dict[str, Any]]:
 
         if img is not None:
             images.append(img)
-            segments.append({"type": "image", "image": img})
+            return "<|vision_start|><|image_pad|><|vision_end|>"  # 替换为 "<image>"
         else:
-            segments.append({"type": "text", "text": "[发送了一张图片]"})
+            return "[发送了一张图片]"
 
-        last_end = end
-
-    # 添加剩余的文本
-    if last_end < len(text):
-        segments.append({"type": "text", "text": text[last_end:]})
-
-    return segments
+    new_text = pattern.sub(replacer, text)
+    return new_text
 
 
 def process_messages(
@@ -158,7 +145,7 @@ def process_messages(
 
     返回:
         (new_messages, new_images):
-            new_messages: 处理后的消息列表，content 已展开为包含文本片段和图像片段的混合列表。
+            new_messages: 处理后的消息列表，content 中的文本项中的占位符已被替换为 "Me" 或失败文本。
             new_images:   更新后的图像列表，包含原有的和成功加载的所有图像。
     """
     if images is None:
@@ -178,8 +165,9 @@ def process_messages(
         for item in original_content:
             if item.get("type") == "text":
                 text = item.get("text", "")
-                segments = process_text(text, new_images)
-                new_content.extend(segments)
+                new_text = process_text(text, new_images)
+                # 保持原有结构，只替换文本内容
+                new_content.append({"type": "text", "text": new_text})
             else:
                 new_content.append(item)
 
