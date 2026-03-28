@@ -102,18 +102,18 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
             character=character,
             client_buffer=embeddings_buffer,
             max_length=7,
-            client_information=information
+            client_information=""
         )
     else:
-        embeddings = information
+        embeddings = ""
         embedding_list = []
 
     setting = SETTING.format(
-        embeddings=embeddings
+        embeddings=information
     )
     system = setting + REPLY_INSTRUCTION
     history = [{"role": "system", "content": [{"type": "text", "text": system}]},
-               {"role": "user", "content": [{"type": "text", "text": IMAGE_SETTING}]}]
+               {"role": "user", "content": [{"type": "text", "text": f"{IMAGE_SETTING}\n{embeddings}"}]}]
     for message in messages[:-1]:
         if message.role != "function":
             history.append({"role": message.role, "content": message.content})
@@ -163,7 +163,7 @@ def parse_response(response):
 
 # 调用LLMEngine进行推理
 async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[dict], gen_kwargs, max_tokens,
-                        active_lora_path: str, tools=None, images=None, enable_thinking=True) -> str:
+                        active_lora_path: str, tools=None, images=None, enable_thinking=True) -> tuple[str, int]:
     if tools is None:
         tools = []
 
@@ -211,20 +211,20 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     final_result = None
     async for result in result_generator:
         final_result = result
-    print(f">>>Input Text Tokens: {len(final_result.prompt_token_ids)} tokens")
     response = final_result.outputs[0].text
+
+    print(f"{response}\n</chat>")
     # 计算吞吐量
     time_cost = (datetime.datetime.now() - timestamp).total_seconds()
     out_tokens = len(final_result.outputs[0].token_ids)
     speed = 0
     if time_cost != 0:
         speed = out_tokens / time_cost
+    print(f">>>Input Text Tokens: {len(final_result.prompt_token_ids)} tokens")
     print(
         f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
-    if out_tokens >= max_tokens:
-        response = "【思考】（沉浸在自己的思绪中......）[SILENCE]"
 
-    return response
+    return response, out_tokens
 
 
 async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionRequest,
@@ -259,7 +259,7 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
     else:
         enable_thinking = False
     # 调用无Lora的大模型
-    response = await vllm_generate(
+    response, out_tokens = await vllm_generate(
         engine,
         autoProcessor,
         tools=tools,
@@ -326,8 +326,9 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         images=images
     )
     messages = history + message_formatted
+    print(f"<chat>\n{history}\n{query}\n<!-- *** -->")
 
-    response = await vllm_generate(
+    response, out_tokens = await vllm_generate(
         engine,
         autoProcessor,
         max_tokens=max_tokens,
@@ -339,12 +340,18 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         enable_thinking=request.enable_thinking
     )
 
-    print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()
 
     response = trim_stop_words(response, stop_words)
 
-    if request.functions:
+    if out_tokens >= max_tokens:
+        choice_data = ChatCompletionResponseChoice(
+            index=index,
+            thought=response,
+            message=ChatMessage(role="assistant", content=[{"type": "text", "text": "【思考】（在自己的思绪中遨游，逐渐分了神......）[SILENCE]"}]),
+            finish_reason="overthink",
+        )
+    elif request.functions:
         choice_data = parse_response(response)
     else:
         choice_data = ChatCompletionResponseChoice(

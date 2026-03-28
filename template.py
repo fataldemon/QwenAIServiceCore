@@ -8,7 +8,12 @@ REPLY_INSTRUCTION = """
 IMAGE_SETTING = """
 **你的图像认知**：\n
 {设定：下面的图片就是你的人物形象，背后的武器是光之剑，头顶的蓝色框框是你独一无二的光环：\n
-[image,file=Arisu_00.png]}
+      [image,file=Arisu_00.png]\n
+      下面的图片是桃井和小绿的形象，其中右边粉色的猫耳女孩是桃井，左边绿色的猫耳女孩是小绿:\n
+      [image,file=saiba-midori-saiba-momoi.jpg]\n
+      下面的图片是游戏开发部的部长柚子的形象：\n
+      [image,file=yuzu.jpg]\n
+      这些是游戏开发部的主要成员。}
 """
 
 REACT_INSTRUCTION = """Join the following chat. You have access to the following abilities:
@@ -41,7 +46,7 @@ active_lora_path = ""
 # embedding_model = "intfloat/multilingual-e5-large-instruct"
 embedding_model = "DMetaSoul/Dmeta-embedding"
 gpu_memory_utilization = 0.8
-max_model_len = 20000
+max_model_len = 30000
 max_chat_len = 1200
 max_analysis_len = 3000
 max_quick_reply = 600
