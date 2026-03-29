@@ -53,6 +53,8 @@ class ChatCompletionRequest(BaseModel):
     on_embedding: Optional[bool] = True
     character: Optional[str] = "tendou_arisu"
     type: Optional[int] = 0  # 0是普通对话，1是总结知识点，2是对话历史长期记忆
+    request_id: Optional[str] = ""
+    abort_id: Optional[str] = None
 
 
 class ChatCompletionResponseChoice(BaseModel):
@@ -60,7 +62,7 @@ class ChatCompletionResponseChoice(BaseModel):
     thought: Optional[str]
     embedding_list: Optional[List[int]] = []
     message: ChatMessage
-    finish_reason: Literal["stop", "length", "function_call"]
+    finish_reason: Literal["stop", "length", "function_call", "overthink", "abort"]
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):

@@ -124,7 +124,7 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
 
 
 # 解析响应数据
-def parse_response(response):
+def parse_response(response, finish_reason):
     if "</think>\n" in response:
         resp_messages = response.split("</think>\n")
         thought = resp_messages[0].replace("<think>\n", "")
@@ -156,14 +156,14 @@ def parse_response(response):
             index=0,
             thought=thought,
             message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
-            finish_reason="stop",
+            finish_reason=finish_reason,
         )
     return choice_data
 
 
 # 调用LLMEngine进行推理
 async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[dict], gen_kwargs, max_tokens,
-                        active_lora_path: str, tools=None, images=None, enable_thinking=True) -> tuple[str, int]:
+                        active_lora_path: str, tools=None, images=None, enable_thinking=True, request_id="") -> tuple[str, int, str]:
     if tools is None:
         tools = []
 
@@ -188,7 +188,9 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
         # stop_token_ids=[autoProcessor.eos_token_id]
     )
     timestamp = datetime.datetime.now()
-    request_id = f"{timestamp.strftime("%Y%m%d%H%M%S")}{random.randint(1, 1000)}"
+    if request_id == "":
+        request_id = f"{timestamp.strftime("%Y%m%d%H%M%S")}{random.randint(1, 1000)}"
+
     # 没有Lora路径时调用原生模型
     if active_lora_path != "":
         result_generator = engine.generate(
@@ -212,6 +214,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     async for result in result_generator:
         final_result = result
     response = final_result.outputs[0].text
+    finish_reason = final_result.outputs[0].finish_reason
 
     print(f"{response}\n</chat>")
     # 计算吞吐量
@@ -224,7 +227,7 @@ async def vllm_generate(engine: AsyncLLMEngine, autoProcessor, messages: list[di
     print(
         f">>>Output token numbers: {out_tokens} tokens, Time Cost: {time_cost} s, Average Throughput: {speed} tokens/s")
 
-    return response, out_tokens
+    return response, out_tokens, finish_reason
 
 
 async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionRequest,
@@ -259,7 +262,7 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
     else:
         enable_thinking = False
     # 调用无Lora的大模型
-    response, out_tokens = await vllm_generate(
+    response, out_tokens, finish_reason = await vllm_generate(
         engine,
         autoProcessor,
         tools=tools,
@@ -284,13 +287,17 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         index=0,
         thought="",
         message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
-        finish_reason="stop",
+        finish_reason=finish_reason,
     )
     return choice_data
 
 
 async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionRequest, max_tokens: int,
                           active_lora_path: str, index: int) -> ChatCompletionResponseChoice:
+    #
+    if request.abort_id is not None:
+        await engine.abort(request_id=request.abort_id)
+
     gen_kwargs = {}
     if request.temperature is not None:
         if request.temperature < 0.01:
@@ -328,7 +335,7 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
     messages = history + message_formatted
     print(f"<chat>\n{history}\n{query}\n<!-- *** -->")
 
-    response, out_tokens = await vllm_generate(
+    response, out_tokens, finish_reason = await vllm_generate(
         engine,
         autoProcessor,
         max_tokens=max_tokens,
@@ -337,7 +344,8 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         active_lora_path=active_lora_path,
         tools=request.functions,
         images=images,
-        enable_thinking=request.enable_thinking
+        enable_thinking=request.enable_thinking,
+        request_id=request.request_id
     )
 
     _gc()
@@ -352,13 +360,13 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
             finish_reason="overthink",
         )
     elif request.functions:
-        choice_data = parse_response(response)
+        choice_data = parse_response(response, finish_reason)
     else:
         choice_data = ChatCompletionResponseChoice(
             index=index,
             thought="",
             message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
-            finish_reason="stop",
+            finish_reason=finish_reason,
         )
 
     # Embedding Process For Answer
