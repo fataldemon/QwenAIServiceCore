@@ -88,10 +88,7 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
             status_code=400,
             detail=f"Invalid request: Expecting at least one user message.",
         )
-    query = ""
-    for content in messages[-1].content:
-        if content.get("type") == "text":
-            query += content.get("text")
+    query = messages[-1].content
 
     # Embedding Process For Request
     if on_embedding and query != _TEXT_COMPLETION_CMD:
@@ -112,8 +109,8 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         embeddings=information
     )
     system = setting + REPLY_INSTRUCTION
-    history = [{"role": "system", "content": [{"type": "text", "text": system}]},
-               {"role": "user", "content": [{"type": "text", "text": f"{IMAGE_SETTING}\n{embeddings}"}]}]
+    history = [{"role": "system", "content": system},
+               {"role": "user", "content": f"{IMAGE_SETTING}\n{embeddings}"}]
     for message in messages[:-1]:
         if message.role != "function":
             history.append({"role": message.role, "content": message.content})
@@ -146,7 +143,7 @@ def parse_response(response, finish_reason):
             thought=thought,
             message=ChatMessage(
                 role="assistant",
-                content=[{"type": "text", "text": response}],
+                content=response,
                 function_call={"name": func_name, "arguments": func_args},
             ),
             finish_reason="function_call",
@@ -155,7 +152,7 @@ def parse_response(response, finish_reason):
         choice_data = ChatCompletionResponseChoice(
             index=0,
             thought=thought,
-            message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
+            message=ChatMessage(role="assistant", content=response),
             finish_reason=finish_reason,
         )
     return choice_data
@@ -286,7 +283,7 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought="",
-        message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
+        message=ChatMessage(role="assistant", content=response),
         finish_reason=finish_reason,
     )
     return choice_data
@@ -329,7 +326,7 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
     )
 
     message_formatted, images = process_messages(
-        messages=[{"role": "user", "content": [{"type": "text", "text": query}]}],
+        messages=[{"role": "user", "content": query}],
         images=images
     )
     messages = history + message_formatted
@@ -356,7 +353,7 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         choice_data = ChatCompletionResponseChoice(
             index=index,
             thought=response,
-            message=ChatMessage(role="assistant", content=[{"type": "text", "text": "【思考】（在自己的思绪中遨游，逐渐分了神......）[SILENCE]"}]),
+            message=ChatMessage(role="assistant", content="【思考】（在自己的思绪中遨游，逐渐分了神......）[SILENCE]"),
             finish_reason="overthink",
         )
     elif request.functions:
@@ -365,16 +362,16 @@ async def chat_on_setting(engine: AsyncLLMEngine, autoProcessor, request: ChatCo
         choice_data = ChatCompletionResponseChoice(
             index=index,
             thought="",
-            message=ChatMessage(role="assistant", content=[{"type": "text", "text": response}]),
+            message=ChatMessage(role="assistant", content=response),
             finish_reason=finish_reason,
         )
 
     # Embedding Process For Answer
     if request.on_embedding:
         # emotion processing
-        content, emotion = remove_emotion(choice_data.message.content[0].get("text"))
+        content, emotion = remove_emotion(choice_data.message.content)
         emotion_checked = check_emotion(emotion, request.character)
-        choice_data.message.content[0]["text"] = choice_data.message.content[0]["text"].replace(emotion, emotion_checked)
+        choice_data.message.content = choice_data.message.content.replace(emotion, emotion_checked)
         # action processing
         content, actions = remove_action(content)
         result, result_list = vector_search(

@@ -26,13 +26,13 @@ class MultimodalContent(BaseModel):
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system", "function"]
-    content: Optional[List[Dict]]
+    content: Optional[str]
     function_call: Optional[Dict] = None
 
 
 class DeltaMessage(BaseModel):
     role: Optional[Literal["user", "assistant", "system"]] = None
-    content: Optional[List[Dict]] = None
+    content: Optional[str] = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -62,7 +62,7 @@ class ChatCompletionResponseChoice(BaseModel):
     thought: Optional[str]
     embedding_list: Optional[List[int]] = []
     message: ChatMessage
-    finish_reason: Literal["stop", "length", "function_call", "overthink", "abort"]
+    finish_reason: Literal["stop", "length", "function_call", "overthink", "abort", "error"]
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):

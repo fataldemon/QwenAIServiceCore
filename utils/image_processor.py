@@ -121,7 +121,7 @@ def process_text(text: str, images: List[Image.Image]) -> str:
 
         if img is not None:
             images.append(img)
-            return "<|vision_start|><|image_pad|><|vision_end|>"  # 替换为 "<image>"
+            return "<|vision_start|><|image_pad|><|vision_end|>"  # 替换为 "<|vision_start|><|image_pad|><|vision_end|>"
         else:
             return "[发送了一张图片]"
 
@@ -140,12 +140,12 @@ def process_messages(
 
     参数:
         messages: 输入消息列表，每条消息格式为:
-                  {"role": str, "content": [{"type": "text", "text": str}, ...]}
+                  {"role": str, "content": str}
         images:   可选的已有图像列表，默认为空列表。成功加载的图像将追加到此列表之后。
 
     返回:
         (new_messages, new_images):
-            new_messages: 处理后的消息列表，content 中的文本项中的占位符已被替换为 "Me" 或失败文本。
+            new_messages: 处理后的消息列表，content 中的文本项中的占位符已被替换为 "<|vision_start|><|image_pad|><|vision_end|>" 或失败文本。
             new_images:   更新后的图像列表，包含原有的和成功加载的所有图像。
     """
     if images is None:
@@ -159,17 +159,8 @@ def process_messages(
             if k != "content":
                 new_msg[k] = v
 
-        original_content = msg.get("content", [])
-        new_content = []
-
-        for item in original_content:
-            if item.get("type") == "text":
-                text = item.get("text", "")
-                new_text = process_text(text, new_images)
-                # 保持原有结构，只替换文本内容
-                new_content.append({"type": "text", "text": new_text})
-            else:
-                new_content.append(item)
+        original_content = msg.get("content")
+        new_content = process_text(original_content, new_images)
 
         new_msg["content"] = new_content
         new_messages.append(new_msg)
@@ -182,18 +173,13 @@ if __name__ == "__main__":
     test_messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "text",
-                 "text": "（老师对爱丽丝说）我发了几张图片"
-                         "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhR_ayMnShcGVQPOQTMKHfh54aNkPxjavysg_woo6K6y8--_kwMyBHByb2RQgL2jAVoQf6Ti2Q5jv-irQV0FhNBBLHoCxoCCAQJneg&spec=0&rkey=CAQSMIYIOjzrxb3eTCVG5osnrvoCVRkVzu0Kfso8iV7HfsZBtCTWi9LdV0dRUCu6EDOMOw]"
-                         "[image,file=Arisu_00.png]"}
-            ]
+            "content": "（老师对爱丽丝说）我发了几张图片"
+                    "[image,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhR_ayMnShcGVQPOQTMKHfh54aNkPxjavysg_woo6K6y8--_kwMyBHByb2RQgL2jAVoQf6Ti2Q5jv-irQV0FhNBBLHoCxoCCAQJneg&spec=0&rkey=CAQSMIYIOjzrxb3eTCVG5osnrvoCVRkVzu0Kfso8iV7HfsZBtCTWi9LdV0dRUCu6EDOMOw]"
+                    "[image,file=Arisu_00.png]"
         },
         {
             "role": "assistant",
-            "content": [
-                {"type": "text", "text": "Here is another image: [image,file=saiba-midori-saiba-momoi.jpg]"}
-            ]
+            "content": "Here is another image: [image,file=saiba-midori-saiba-momoi.jpg]"
         }
     ]
 

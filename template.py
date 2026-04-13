@@ -37,10 +37,9 @@ Begin!"""
 _TEXT_COMPLETION_CMD = object()
 
 # LLM and Lora path
-# llm_checkpoint_path = "/home/madousama/llm/qwq-32b-gptq-int8"
 # llm_checkpoint_path = "/home/madousama/llm/Qwen3-32B-GPTQ-Int8"
-llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-FP8"
-# active_lora_path = "/home/madousama/qlora/Alice6.0_qwq_Int8_20250310/checkpoint-30"
+# llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-FP8"
+llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-FP8"
 # active_lora_path = "/home/madousama/qlora/Alice7.0_qwen3_20250505"
 active_lora_path = ""
 # embedding_model = "intfloat/multilingual-e5-large-instruct"
