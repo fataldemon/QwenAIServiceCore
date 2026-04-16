@@ -128,10 +128,7 @@ def add_knowledge(content: str, character: str):
                 tag = tag.strip()
                 if tag not in tags:
                     tags.append(tag)
-                    if tags_map.get(tag) is not None:
-                        tags_map[tag] += [materials_num + i]
-                    else:
-                        tags_map[tag].append(materials_num + i)
+                    tags_map.setdefault(tag, []).append(materials_num + i)
                 else:
                     tags_map[tag].append(materials_num + i)
     print(f"Paragraphs: {paragraphs}")

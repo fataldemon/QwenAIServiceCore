@@ -141,16 +141,25 @@ def parse_tool_call(text: str):
     match = re.search(tool_call_pattern, text, re.DOTALL)
     if not match:
         return None
-    content = match.group(1)
+    content = match.group(1).strip()
 
-    # 提取函数名
+    # 优先尝试按新格式解析（JSON）
+    try:
+        data = json.loads(content)
+        if isinstance(data, dict) and "name" in data and "arguments" in data:
+            # 确保 arguments 是字典类型
+            args = data["arguments"] if isinstance(data["arguments"], dict) else {}
+            return {"name": data["name"], "arguments": args}
+    except json.JSONDecodeError:
+        pass  # 不是有效 JSON，继续按旧格式解析
+
+    # 回退到旧格式解析（XML 风格）
     func_match = re.search(r'<function=([^>]+)>(.*?)</function>', content, re.DOTALL)
     if not func_match:
         return None
     func_name = func_match.group(1).strip()
     func_body = func_match.group(2)
 
-    # 提取参数
     param_pattern = r'<parameter=([^>]+)>(.*?)</parameter>'
     params = {}
     for param_match in re.finditer(param_pattern, func_body, re.DOTALL):

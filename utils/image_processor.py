@@ -93,7 +93,7 @@ def open_image_from_url(url: str) -> Optional[Image.Image]:
 
 def process_text(text: str, images: List[Image.Image]) -> str:
     """
-    处理一个文本字符串，将其中的图像占位符替换为 "Me" 文本。
+    处理一个文本字符串，将其中的图像占位符替换为 "<|vision_start|><|image_pad|><|vision_end|>" 文本。
     成功加载的图片会追加到 images 列表中。
 
     支持的占位符格式：

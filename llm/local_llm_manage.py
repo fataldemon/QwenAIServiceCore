@@ -269,21 +269,23 @@ async def chat(engine: AsyncLLMEngine, autoProcessor, request: ChatCompletionReq
         active_lora_path="",
         enable_thinking=enable_thinking
     )
+    _gc()
+
     print(f"Assistant:{response}")
     # 如果是知识点概要就存储
     print(f'Assistant Type: {request.type}')
+    reply = response
+    if "</think>\n" in response:
+        resp_messages = response.split("</think>\n")
+        reply = resp_messages[1].strip()
     if request.type == 1:
-        reply = response
-        if "</think>\n" in response:
-            resp_messages = response.split("</think>\n")
-            reply = resp_messages[1]
         add_knowledge(content=reply, character=request.character)
         print(f"Knowledge Saved: {response}")
 
     choice_data = ChatCompletionResponseChoice(
         index=0,
         thought="",
-        message=ChatMessage(role="assistant", content=response),
+        message=ChatMessage(role="assistant", content=reply),
         finish_reason=finish_reason,
     )
     return choice_data
