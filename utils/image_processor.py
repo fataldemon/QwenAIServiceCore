@@ -1,3 +1,4 @@
+import base64
 import re
 import os
 import hashlib
@@ -91,14 +92,30 @@ def open_image_from_url(url: str) -> Optional[Image.Image]:
         return None
 
 
+def open_image_from_base64(base64_str: str) -> Optional[Image.Image]:
+    """从 base64 字符串加载图像，支持 data URL 前缀"""
+    if base64_str.startswith("data:image"):
+        try:
+            base64_str = base64_str.split(",", 1)[1]
+        except IndexError:
+            return None
+    try:
+        img_data = base64.b64decode(base64_str)
+        img = Image.open(BytesIO(img_data))
+        return img
+    except Exception:
+        return None
+
+
 def process_text(text: str, images: List[Image.Image]) -> str:
     """
     处理一个文本字符串，将其中的图像占位符替换为 "<|vision_start|><|image_pad|><|vision_end|>" 文本。
     成功加载的图片会追加到 images 列表中。
 
-    支持的占位符格式：
-        - [image,url=...]  网络图片，从 URL 下载
-        - [image,file=...] 本地图片，从固定目录读取
+    处理文本中的图像占位符，支持三种格式：
+        [image,url=...]
+        [image,file=...]
+        [image,base64=...]
 
     参数:
         text: 原始文本字符串
@@ -107,7 +124,7 @@ def process_text(text: str, images: List[Image.Image]) -> str:
     返回:
         替换后的文本字符串
     """
-    pattern = re.compile(r'\[image,(?P<type>url|file)=(?P<value>[^\]]+)\]')
+    pattern = re.compile(r'\[image,(?P<type>url|file|base64)=(?P<value>[^\]]+)\]')
 
     def replacer(match):
         img_type = match.group("type")
@@ -116,17 +133,18 @@ def process_text(text: str, images: List[Image.Image]) -> str:
 
         if img_type == "url":
             img = open_image_from_url(value)
-        else:  # file
+        elif img_type == "file":
             img = open_image_from_local(value)
+        else:  # base64
+            img = open_image_from_base64(value)
 
         if img is not None:
             images.append(img)
-            return "<|vision_start|><|image_pad|><|vision_end|>"  # 替换为 "<|vision_start|><|image_pad|><|vision_end|>"
+            return "<|vision_start|><|image_pad|><|vision_end|>"
         else:
             return "[发送了一张图片]"
 
-    new_text = pattern.sub(replacer, text)
-    return new_text
+    return pattern.sub(replacer, text)
 
 
 def process_messages(

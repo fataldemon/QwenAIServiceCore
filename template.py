@@ -39,16 +39,17 @@ Begin!"""
 _TEXT_COMPLETION_CMD = object()
 
 # LLM and Lora path
-# llm_checkpoint_path = "/home/madousama/llm/Qwen3-32B-GPTQ-Int8"
 # llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-FP8"
-llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-FP8"
+# llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-FP8"
+llm_checkpoint_path = "/home/madousama/llm/Qwen3.6-35B-A3B-FP8"
+# llm_checkpoint_path = "/home/madousama/llm/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-AWQ"
 # active_lora_path = "/home/madousama/qlora/Alice7.0_qwen3_20250505"
 active_lora_path = ""
 # embedding_model = "intfloat/multilingual-e5-large-instruct"
 embedding_model = "DMetaSoul/Dmeta-embedding"
 gpu_memory_utilization = 0.8
-max_model_len = 40000
-max_chat_len = 1200
+max_model_len = 70000
+max_chat_len = 2000
 max_analysis_len = 3000
 max_quick_reply = 600
 
