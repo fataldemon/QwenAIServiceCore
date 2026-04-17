@@ -1,3 +1,5 @@
+import re
+
 from sentence_transformers import SentenceTransformer
 import os
 import faiss
@@ -12,6 +14,23 @@ model = SentenceTransformer(args.embedding_path, device='cuda')
 DOC_FOLDER = """embedding/{character}/{subject}/"""
 VECTOR_FOLDER = """embedding/{character}/{subject}/vector/"""
 IDENTITY_FILE = """embedding/{character}/identity.mem"""
+
+
+def remove_reference_url(text: str) -> str:
+    """
+    移除字符串末尾的 <reference_url:...> 标签。
+
+    参数:
+        text: 原始字符串，末尾可能包含 <reference_url:https://..., http://..., ...>
+
+    返回:
+        去除标签后的字符串，并去除尾部多余空白。
+    """
+    # 匹配从 <reference_url: 开始到第一个 > 结束的内容
+    pattern = r'<reference_url:[^>]*>'
+    # 替换为空字符串，并去除尾部空白（如换行、空格）
+    cleaned = re.sub(pattern, '', text).rstrip()
+    return cleaned
 
 
 def read_as_content(file_name: str, doc_folder: str) -> str:
@@ -96,6 +115,7 @@ def generate_vector(character: str, subject: str):
 
 
 def add_knowledge(content: str, character: str):
+    content = remove_reference_url(content)
     doc_folder = DOC_FOLDER.format(character=character, subject="knowledge")
     vector_folder = VECTOR_FOLDER.format(character=character, subject="knowledge")
     write_as_memory(file_name="knowledge.mem", doc_folder=DOC_FOLDER.format(character=character, subject="knowledge"),
