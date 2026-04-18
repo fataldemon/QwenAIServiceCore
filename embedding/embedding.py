@@ -29,7 +29,7 @@ def remove_reference_url(text: str) -> str:
     # 匹配从 <reference_url: 开始到第一个 > 结束的内容
     pattern = r'<reference_url:[^>]*>'
     # 替换为空字符串，并去除尾部空白（如换行、空格）
-    cleaned = re.sub(pattern, '', text).rstrip()
+    cleaned = re.sub(pattern, '', text).strip()
     return cleaned
 
 

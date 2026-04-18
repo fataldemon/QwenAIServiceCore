@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 import torch
 from vllm import SamplingParams, AsyncEngineArgs, AsyncLLMEngine, TokensPrompt
+from vllm.config import CompilationConfig, CUDAGraphMode
 from vllm.lora.request import LoRARequest
 from models.base import (ModelCard, ModelList, ChatMessage, ChatCompletionRequest,
                          ChatCompletionResponseChoice, ChatCompletionResponse)
@@ -23,6 +24,7 @@ def vllm_start_engine(
         tensor_parallel_size: int,
         enable_lora: False
 ) -> AsyncLLMEngine:
+    compilation_config = CompilationConfig(cudagraph_mode=CUDAGraphMode.PIECEWISE)
     if not enable_lora:
         engine_args = AsyncEngineArgs(
             model=model,
@@ -31,7 +33,8 @@ def vllm_start_engine(
             gpu_memory_utilization=gpu_memory_utilization,
             max_model_len=max_model_len,
             tensor_parallel_size=tensor_parallel_size,
-            enable_sleep_mode=True
+            enable_sleep_mode=True,
+            compilation_config=compilation_config
         )
     else:
         engine_args = AsyncEngineArgs(
@@ -42,7 +45,8 @@ def vllm_start_engine(
             max_model_len=max_model_len,
             tensor_parallel_size=tensor_parallel_size,
             enable_lora=True,
-            enable_sleep_mode=True
+            enable_sleep_mode=True,
+            compilation_config=compilation_config
         )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine
