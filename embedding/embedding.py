@@ -1,3 +1,4 @@
+import fcntl
 import re
 
 from sentence_transformers import SentenceTransformer
@@ -52,130 +53,178 @@ def write_index(index, vector_folder: str) -> str:
     return vector_folder + 'index.faiss'
 
 
-def generate_vector(character: str, subject: str):
+def generate_vector(character: str, subject: str) -> str:
     if subject not in ["setting", "expression", "behaviour", "memory", "knowledge"]:
         return "subject incorrect"
-    content = ""
+
     doc_folder = DOC_FOLDER.format(character=character, subject=subject)
     vector_folder = VECTOR_FOLDER.format(character=character, subject=subject)
-    if not os.path.exists(vector_folder):
-        # 如果不存在，创建目录
-        os.mkdir(vector_folder)
-        return "empty"
-    file_list = os.listdir(doc_folder)
-    for file_name in file_list:
-        # 读取所有文件内容为字符串
-        if file_name.endswith(".mem"):
-            content += read_as_content(file_name, doc_folder)
-    if content == "":
-        return "empty"
-    # 按换行符分割为段落
-    paragraphs = content.split("\n")
 
-    # sentences = []
-    tags = []
-    tags_map = {}
-    for i in range(len(paragraphs)):
-        paragraph = paragraphs[i]
-        # 对注解进行解析
-        if "##" in paragraph:
-            tag_list = paragraph.split("##")
-            paragraphs[i] = tag_list[0]
-            tag_list = tag_list[1:]
-            print(tag_list)
-            for tag in tag_list:
-                tag = tag.strip()
+    # 确保向量目录存在（即使已存在也继续重建，覆盖旧数据）
+    os.makedirs(vector_folder, exist_ok=True)
+
+    # 收集所有 .mem 文件内容
+    content_parts = []
+    if os.path.exists(doc_folder):
+        for file_name in os.listdir(doc_folder):
+            if file_name.endswith(".mem"):
+                content_parts.append(read_as_content(file_name, doc_folder))
+    content = "\n".join(content_parts)
+
+    # 如果没有有效内容，清空旧向量文件后返回
+    if not content.strip():
+        for f in ["materials.pkl", "tags_map.pkl", "paragraphs.pkl", "srch_embeddings.npy", "index.faiss"]:
+            fp = os.path.join(vector_folder, f)
+            if os.path.exists(fp):
+                os.remove(fp)
+        return "empty"
+
+    # 分割段落并过滤空行
+    raw_paragraphs = [p for p in content.split("\n") if p.strip()]
+    paragraphs: List[str] = []
+    tags: List[str] = []
+    tags_map: dict = {}
+
+    for para in raw_paragraphs:
+        if "##" in para:
+            parts = para.split("##")
+            clean_para = parts[0].strip()
+            # 提取标签，过滤空标签，并去重（段落内相同标签只处理一次）
+            tag_list = [t.strip() for t in parts[1:] if t.strip()]
+            unique_tags = set(tag_list)
+            current_idx = len(paragraphs)  # 当前段落即将存放的索引
+            for tag in unique_tags:
                 if tag not in tags:
                     tags.append(tag)
-                    tags_map[tag] = [i]
+                    tags_map[tag] = [current_idx]
                 else:
-                    tags_map[tag].append(i)
-    print(tags_map)
-    # 搜索时将注解与段落并列，制造出搜索材料，并以搜索材料为基准生成向量
-    search_materials = paragraphs + tags
-    if not os.path.exists(vector_folder):
-        # 如果不存在，创建目录
-        os.mkdir(vector_folder)
-    with open(vector_folder + 'tags_map.pkl', 'wb') as f:
-        pickle.dump(tags_map, f)
-    with open(vector_folder + 'materials.pkl', 'wb') as f:
-        pickle.dump(search_materials, f)
+                    # 避免重复添加相同段落索引
+                    if current_idx not in tags_map[tag]:
+                        tags_map[tag].append(current_idx)
+            paragraphs.append(clean_para)
+        else:
+            paragraphs.append(para)
 
-    with open(vector_folder + 'paragraphs.pkl', 'wb') as f:
+    # 构建搜索材料：所有段落 + 所有标签（标签会作为独立检索项，映射到对应的段落）
+    search_materials = paragraphs + tags
+
+    # 保存元数据文件
+    with open(os.path.join(vector_folder, 'tags_map.pkl'), 'wb') as f:
+        pickle.dump(tags_map, f)
+    with open(os.path.join(vector_folder, 'materials.pkl'), 'wb') as f:
+        pickle.dump(search_materials, f)
+    with open(os.path.join(vector_folder, 'paragraphs.pkl'), 'wb') as f:
         pickle.dump(paragraphs, f)
-    # 生成向量
-    search_embeddings = model.encode(search_materials)
-    # 保存文件内容为向量
-    np.save(vector_folder + "srch_embeddings", search_embeddings)
+
+    # 生成向量并构建 FAISS 索引
+    try:
+        search_embeddings = model.encode(search_materials)
+    except Exception as e:
+        print(f"向量编码失败: {e}")
+        return "error"
+
+    np.save(os.path.join(vector_folder, "srch_embeddings.npy"), search_embeddings)
     dimension = search_embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
     index.add(search_embeddings)
-    write_index(index, vector_folder)
+    write_index(index, vector_folder)  # 该函数应通过 faiss.write_index 保存为 index.faiss
+
     return "success"
 
 
-def add_knowledge(content: str, character: str):
+def add_knowledge(content: str, character: str) -> str:
     content = remove_reference_url(content)
     doc_folder = DOC_FOLDER.format(character=character, subject="knowledge")
     vector_folder = VECTOR_FOLDER.format(character=character, subject="knowledge")
-    write_as_memory(file_name="knowledge.mem", doc_folder=DOC_FOLDER.format(character=character, subject="knowledge"),
-                    content=content)
-    if not os.path.exists(vector_folder):
-        # 如果不存在，创建目录，并全量更新向量
-        os.mkdir(vector_folder)
+
+    # 保存原始内容到 .mem 文件（保持原有逻辑）
+    write_as_memory(file_name="knowledge.mem", doc_folder=doc_folder, content=content)
+
+    # 使用文件锁防止并发写入
+    lock_path = os.path.join(vector_folder, ".add_lock")
+    os.makedirs(vector_folder, exist_ok=True)
+    with open(lock_path, "w") as lockfile:
+        fcntl.flock(lockfile, fcntl.LOCK_EX)
+        return _add_knowledge_locked(content, character, vector_folder)
+
+
+def _add_knowledge_locked(content: str, character: str, vector_folder: str) -> str:
+    # 检查所有必要文件是否存在
+    required_files = ["materials.pkl", "tags_map.pkl", "paragraphs.pkl", "index.faiss"]
+    if not all(os.path.exists(os.path.join(vector_folder, f)) for f in required_files):
+        # 缺少文件，全量重建
         return generate_vector(character, "knowledge")
 
-    # 按换行符分割为段落
-    paragraphs = content.split("\n")
-    tags = []
-    # 读取旧数据
-    with open(vector_folder + 'materials.pkl', 'rb') as f:
+    # 加载旧数据
+    with open(os.path.join(vector_folder, 'materials.pkl'), 'rb') as f:
         materials = pickle.load(f)
-    with open(vector_folder + 'tags_map.pkl', 'rb') as f:
+    with open(os.path.join(vector_folder, 'tags_map.pkl'), 'rb') as f:
         tags_map = pickle.load(f)
-    with open(vector_folder + 'paragraphs.pkl', 'rb') as f:
+    with open(os.path.join(vector_folder, 'paragraphs.pkl'), 'rb') as f:
         paragraphs_old = pickle.load(f)
-    materials_num = len(materials)
-    for i in range(len(paragraphs)):
-        paragraph = paragraphs[i]
-        # 对注解进行解析
-        if "##" in paragraph:
-            tag_list = paragraph.split("##")
-            paragraphs[i] = tag_list[0]
-            tag_list = tag_list[1:]
-            print(tag_list)
-            for tag in tag_list:
-                tag = tag.strip()
-                if tag not in tags:
-                    tags.append(tag)
-                    tags_map.setdefault(tag, []).append(materials_num + i)
-                else:
-                    tags_map[tag].append(materials_num + i)
-    print(f"Paragraphs: {paragraphs}")
-    print(f"Tags_Map: {tags_map}")
 
-    # 搜索时将注解与段落并列，制造出搜索材料，并以搜索材料为基准生成向量
-    materials += paragraphs + tags
-    paragraphs_old += paragraphs
-    if not os.path.exists(vector_folder):
-        # 如果不存在，创建目录
-        os.mkdir(vector_folder)
-    with open(vector_folder + 'tags_map.pkl', 'wb') as f:
-        pickle.dump(tags_map, f)
-    with open(vector_folder + 'materials.pkl', 'wb') as f:
+    # 加载旧索引，用于后续增量添加
+    index = faiss.read_index(os.path.join(vector_folder, 'index.faiss'))
+
+    # 一致性检查
+    if len(materials) != index.ntotal:
+        # 数据不一致，全量重建
+        return generate_vector(character, "knowledge")
+
+    # 处理新内容：分割段落，过滤空行
+    raw_paragraphs = [p for p in content.split("\n") if p.strip()]
+    materials_num = len(materials)
+    new_paragraphs = []
+    new_tags = []
+    tags_map = tags_map.copy()  # 避免修改原对象直到确认成功
+
+    for i, para in enumerate(raw_paragraphs):
+        if "##" in para:
+            parts = para.split("##")
+            clean_para = parts[0].strip()
+            tag_list = [t.strip() for t in parts[1:] if t.strip()]
+            # 标签去重（段落级别）
+            unique_tags = set(tag_list)
+            for tag in unique_tags:
+                if tag not in new_tags:
+                    new_tags.append(tag)
+                # 避免重复添加相同段落索引
+                idx = materials_num + len(new_paragraphs)  # 当前段落即将添加的位置
+                if idx not in tags_map.setdefault(tag, []):
+                    tags_map[tag].append(idx)
+            new_paragraphs.append(clean_para)
+        else:
+            new_paragraphs.append(para)
+
+    # 如果没有新增任何有效内容，直接返回
+    if not new_paragraphs and not new_tags:
+        return "success"
+
+    # 生成新向量（段落 + 标签）
+    to_encode = new_paragraphs + new_tags
+    new_embeddings = model.encode(to_encode)
+
+    # 增量添加到 FAISS 索引
+    index.add(new_embeddings)
+
+    # 更新 materials 和 paragraphs_old
+    materials.extend(new_paragraphs + new_tags)
+    paragraphs_old.extend(new_paragraphs)
+
+    # 写回文件
+    with open(os.path.join(vector_folder, 'materials.pkl'), 'wb') as f:
         pickle.dump(materials, f)
-    with open(vector_folder + 'paragraphs.pkl', 'wb') as f:
+    with open(os.path.join(vector_folder, 'tags_map.pkl'), 'wb') as f:
+        pickle.dump(tags_map, f)
+    with open(os.path.join(vector_folder, 'paragraphs.pkl'), 'wb') as f:
         pickle.dump(paragraphs_old, f)
-    # 读取向量
-    embeddings = model.encode(paragraphs + tags)
-    old_embeddings = np.load(vector_folder + "srch_embeddings.npy")
-    search_embeddings = np.vstack((old_embeddings, embeddings))
-    # 保存文件内容为向量
-    np.save(vector_folder + "srch_embeddings", search_embeddings)
-    dimension = search_embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(search_embeddings)
-    write_index(index, vector_folder)
+
+    # 保存索引
+    faiss.write_index(index, os.path.join(vector_folder, 'index.faiss'))
+
+    # 可选：如果需要保留原始 embedding 文件（供 debug），可以增量保存，但非必须
+    # 这里省略 srch_embeddings.npy 的维护，因为 FAISS 索引已足够
+
     return "success"
 
 
@@ -207,12 +256,19 @@ def vector_search(question: str, top_k: int, character: str, subject: str, instr
         tags_map = pickle.load(f)
     index = faiss.read_index(vector_folder + 'index.faiss')
     search = model.encode([question])
-    accuracy, matches = index.search(search, top_k*3+1)
+    # 防止请求的 top_k*3+1 超出索引中的向量总数
+    n_total = index.ntotal
+    search_k = min(top_k * 3 + 1, n_total)
+    accuracy, matches = index.search(search, search_k)
     print(accuracy, " ", matches)
     result = []
     result_index_list = []
     log_info = ""
     for i in matches[0]:
+        # 检查索引 i 是否在 materials 范围内
+        if i < 0 or i >= len(materials):
+            print(f"警告: 检索返回的索引 {i} 超出 materials 范围 (0~{len(materials)-1})，已跳过")
+            continue
         answer = materials[i].strip()
         if tags_map.get(answer) is None:
             if i not in result_index_list:
@@ -220,14 +276,38 @@ def vector_search(question: str, top_k: int, character: str, subject: str, instr
             log_info += f'编号{i};'
         else:
             for j in tags_map.get(answer):
+                # 检查映射出的 j 是否在 materials 范围内
+                if j < 0 or j >= len(materials):
+                    print(f"警告: tags_map 中的索引 {j} 超出 materials 范围，已跳过")
+                    continue
                 log_info += f'定位到tag：{answer},编号{j};'
                 if j not in result_index_list:
                     result_index_list.append(int(j))
-    for k in range(top_k):
-        result.append(materials[result_index_list[k]].strip())
-    print(f"IndexList={result_index_list[:top_k]}.  {log_info}  ")
-    # print("搜索结果为：", result)  # 抛弃最后一个换行符
-    return result, result_index_list[:top_k][::-1]  # 返回队首top_k个元素，倒序输出（最后一个是相关度最高的）
+
+    # 过滤掉所有可能越界的索引（其实上面已过滤，但再保一遍）
+    valid_indices = [idx for idx in result_index_list if 0 <= idx < len(materials)]
+
+    # 如果有效索引不足 top_k，则用第一个有效索引重复填充；若无任何有效索引，用 0 占位
+    if len(valid_indices) < top_k:
+        print(f"警告: 有效索引只有 {len(valid_indices)} 个，不足 top_k={top_k}，将使用第一个有效索引填充剩余位置")
+        if valid_indices:
+            pad_index = valid_indices[0]
+        else:
+            pad_index = 0
+            # 确保 pad_index 不会越界（如果 materials 为空则特殊处理）
+            if len(materials) == 0:
+                print("错误: materials 为空，无法返回任何结果")
+                return [""] * top_k, [0] * top_k
+        while len(valid_indices) < top_k:
+            valid_indices.append(pad_index)
+
+    # 取前 top_k 个索引
+    topk_indices = valid_indices[:top_k]
+    result = [materials[idx].strip() for idx in topk_indices]
+
+    print(f"IndexList={topk_indices[::-1]}.  {log_info}  ")
+    # 返回队首 top_k 个元素，倒序输出（最后一个是相关度最高的）
+    return result, topk_indices[::-1]
 
 
 def find_material_by_index(index_list: list[int], character: str, subject: str) -> list[str]:

@@ -24,7 +24,6 @@ def vllm_start_engine(
         tensor_parallel_size: int,
         enable_lora: False
 ) -> AsyncLLMEngine:
-    compilation_config = CompilationConfig(cudagraph_mode=CUDAGraphMode.PIECEWISE)
     if not enable_lora:
         engine_args = AsyncEngineArgs(
             model=model,
@@ -34,7 +33,12 @@ def vllm_start_engine(
             max_model_len=max_model_len,
             tensor_parallel_size=tensor_parallel_size,
             enable_sleep_mode=True,
-            compilation_config=compilation_config
+            enable_chunked_prefill=True,
+            # speculative_config={
+            #     "method": "qwen3_next_mtp",  # 若使用Qwen3模型，请改为 "qwen3_next_mtp"
+            #     "num_speculative_tokens": 1,  # 投机深度
+            #     # "disable_padded_drafter_batch": False   # 可选，默认为 False
+            # },
         )
     else:
         engine_args = AsyncEngineArgs(
@@ -46,7 +50,12 @@ def vllm_start_engine(
             tensor_parallel_size=tensor_parallel_size,
             enable_lora=True,
             enable_sleep_mode=True,
-            compilation_config=compilation_config
+            enable_chunked_prefill=True,
+            # speculative_config={
+            #     "method": "qwen3_next_mtp",  # 若使用Qwen3模型，请改为 "qwen3_next_mtp"
+            #     "num_speculative_tokens": 1,  # 投机深度为
+            #     # "disable_padded_drafter_batch": False   # 可选，默认为 False
+            # },
         )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine
@@ -110,11 +119,12 @@ def parse_messages(character, messages, on_embedding, information, embeddings_bu
         embedding_list = []
 
     setting = SETTING.format(
-        embeddings=information
+        embeddings=information + embeddings
     )
     system = setting + REPLY_INSTRUCTION
     history = [{"role": "system", "content": system},
-               {"role": "user", "content": f"{IMAGE_SETTING}\n{embeddings}"}]
+               {"role": "user", "content": f"{IMAGE_SETTING}"},
+               {"role": "user", "content": "----------------------CONVERSATION START FROM HERE------------------------------"}]
     for message in messages[:-1]:
         if message.role != "function":
             history.append({"role": message.role, "content": message.content})
