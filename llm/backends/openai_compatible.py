@@ -133,44 +133,68 @@ class OpenAICompatibleBackend(LLMBackend):
         request_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> GenerationResult:
-        payload = self._build_payload(
+        """Run the upstream as a *stream* internally and aggregate.
+
+        The legacy in-process vLLM backend exposed a non-streaming HTTP
+        contract whose body could nevertheless be **interrupted mid-flight**
+        — its implementation iterated over an internal generator and the
+        caller (``engine.abort(...)``) would terminate that iterator. The
+        client then received a normal :class:`ChatCompletionResponse` whose
+        ``content`` was the partial text and whose ``finish_reason`` was
+        ``"abort"``.
+
+        To keep that contract working unchanged, we deliberately do **not**
+        issue a one-shot ``stream=false`` POST here. Instead we open an SSE
+        stream and accumulate the chunks until either the upstream sends
+        ``[DONE]`` or someone flips our abort event via :meth:`abort`.
+        On abort, whatever text has been produced so far is returned with
+        ``finish_reason="abort"`` — exactly the legacy shape.
+        """
+        text_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        function_calls: List[Dict[str, Any]] = []
+        finish_reason = "stop"
+        prompt_tokens = 0
+        completion_tokens = 0
+        last_raw: Optional[Dict[str, Any]] = None
+
+        it = await self.generate_stream(
             messages=messages,
             sampling=sampling,
             tools=tools,
-            stream=False,
+            request_id=request_id,
             extra_body=extra_body,
         )
-        try:
-            resp = await self._client.post(
-                self._build_url(),
-                headers=self._build_headers(),
-                json=payload,
-                timeout=self._config.request_timeout or 600.0,
-            )
-        except httpx.HTTPError as e:
-            return GenerationResult(
-                text=f"[backend error] {e!r}",
-                finish_reason="error",
-            )
-        if resp.status_code >= 400:
-            return GenerationResult(
-                text=f"[backend http {resp.status_code}] {resp.text[:500]}",
-                finish_reason="error",
-            )
-        data = resp.json()
-        choice = (data.get("choices") or [{}])[0]
-        msg = choice.get("message", {}) or {}
-        usage = data.get("usage", {}) or {}
-        tool_calls = msg.get("tool_calls") or []
-        function_calls = _tool_calls_to_function_calls(tool_calls)
+        async for chunk in it:
+            if chunk.text:
+                text_parts.append(chunk.text)
+            if chunk.reasoning:
+                reasoning_parts.append(chunk.reasoning)
+            # generate_stream emits the *cumulative* function_calls list on
+            # every tool-call delta, so the latest non-empty list wins.
+            if chunk.function_calls:
+                function_calls = chunk.function_calls
+            if chunk.raw is not None:
+                last_raw = chunk.raw
+                usage = (chunk.raw or {}).get("usage") or {}
+                if usage:
+                    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+                    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            if chunk.finish_reason:
+                finish_reason = chunk.finish_reason
+                # ``error`` / ``abort`` are terminal, but we still want to
+                # return whatever text we have so the front-end sees the
+                # partial answer just like the legacy implementation did.
+                break
+
         return GenerationResult(
-            text=str(msg.get("content") or ""),
-            reasoning=str(msg.get("reasoning_content") or ""),
+            text="".join(text_parts),
+            reasoning="".join(reasoning_parts),
             function_calls=function_calls,
-            finish_reason=str(choice.get("finish_reason") or "stop"),
-            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-            raw=data,
+            finish_reason=finish_reason,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            raw=last_raw,
         )
 
     # ----- streaming ---------------------------------------------------------

@@ -49,8 +49,31 @@ accepts:
 | `character` | Character folder under `embedding/`. Defaults to `tendou_arisu`. |
 | `type` | `0` chat (default), `1` save assistant message as knowledge (then return `"ok"`), `2` long-term memory (currently treated as `0`). |
 | `request_id` | Idempotency key; forwarded to the upstream. |
-| `abort_id` | Client-chosen key. POST to `/admin/api/abort/{abort_id}` to cancel. |
+| `abort_id` | Client-chosen key. POST to `/admin/api/abort/{abort_id}` to cancel. Works on **both** streaming and non-streaming routes — see "Cooperative abort" below. |
 | `enable_thinking` | Forwarded as `chat_template_kwargs.enable_thinking` to upstreams that understand it (Qwen). |
+
+## Cooperative abort
+
+The legacy `main` branch supported aborting an in-flight non-streaming
+request and returning the partial answer that had been generated so far.
+The `dev` branch preserves that contract.
+
+Behaviour:
+
+* Non-streaming (`POST /assistant/v1/chat/completions`,
+  `POST /v1/chat/completions` without `stream=true`, `WS /ws/{*}`):
+  upon `POST /admin/api/abort/{abort_id}` the in-flight call short-circuits
+  and the original HTTP / WebSocket request **still returns a normal
+  `ChatCompletionResponse`** whose `content` is whatever tokens had been
+  produced and whose `finish_reason` is `"abort"`. Front-ends that rely on
+  this behaviour continue to work unchanged.
+* Streaming (`/v1/chat/completions` with `stream=true`): the SSE stream
+  emits a terminal `data:` frame with `finish_reason="abort"`, followed by
+  `data: [DONE]`.
+
+Implementation note: internally the gateway always talks to the upstream
+via SSE (even for non-streaming clients) and aggregates the chunks. This
+is what makes mid-flight cancellation possible.
 
 ## Admin REST
 

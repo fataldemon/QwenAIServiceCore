@@ -423,8 +423,9 @@ async def chat_on_setting_stream(
                         index=index,
                         delta=DeltaMessage(content=chunk.text or None),
                         finish_reason=(
-                            "length" if chunk.finish_reason == "length"
-                            else ("stop" if chunk.finish_reason else None)
+                            _map_finish_reason(chunk.finish_reason)
+                            if chunk.finish_reason
+                            else None
                         ),
                     )
                 ],

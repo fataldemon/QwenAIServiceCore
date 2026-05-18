@@ -47,8 +47,27 @@ data: [DONE]
 | `character` | 对应 `embedding/` 下的角色目录，默认 `tendou_arisu` |
 | `type` | `0` 普通聊天（默认）；`1` 把最后一条 assistant 消息保存为新的知识，返回 `"ok"`；`2` 长期记忆（当前等同 `0`） |
 | `request_id` | 幂等键，原样转发给上游 |
-| `abort_id` | 客户端自定义的取消键，POST 到 `/admin/api/abort/{abort_id}` 可取消 |
+| `abort_id` | 客户端自定义的取消键，POST 到 `/admin/api/abort/{abort_id}` 可取消。**流式与非流式两条路径都生效**，详见下面"协作式取消"。 |
 | `enable_thinking` | 转给支持该参数的上游（Qwen 系），通过 `chat_template_kwargs.enable_thinking` 传递 |
+
+## 协作式取消（abort）
+
+旧 `main` 分支允许在非流式请求"飞行中"取消，并把"取消时已经生成的那一段"
+作为普通 `ChatCompletionResponse` 返回给前端。`dev` 分支完整保留了这个契约。
+
+行为：
+
+* 非流式（`POST /assistant/v1/chat/completions`、不带 `stream=true` 的
+  `POST /v1/chat/completions`、`WS /ws/{*}`）：当 POST
+  `/admin/api/abort/{abort_id}` 进来时，飞行中的请求会就地短路，**原请求
+  仍然按正常 `ChatCompletionResponse` 返回**，其中 `content` 是被打断那一
+  刻已经产生的文本，`finish_reason` 为 `"abort"`。依赖该行为的前端可以
+  原样工作，无需修改。
+* 流式（`/v1/chat/completions` 带 `stream=true`）：SSE 流会最后发一帧
+  `finish_reason="abort"`，然后 `data: [DONE]`。
+
+实现说明：网关内部**始终用 SSE 与上游通信**（即使对外是非流式的客户端，
+也是先 stream、后聚合），这是非流式也能中途取消的前提。
 
 ## Admin REST
 
