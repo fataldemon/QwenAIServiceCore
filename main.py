@@ -53,6 +53,7 @@ from starlette.responses import Response
 from admin.routes import register_admin_routes
 from core.config_manager import get_config_manager
 from core.mcp_manager import get_mcp_manager
+from core.persona_manager import get_persona_manager
 from core.skill_manager import get_skill_manager
 from embedding.migrate import migrate_all
 from llm.chat import (
@@ -62,7 +63,15 @@ from llm.chat import (
     chat_on_setting_stream,
 )
 from models.base import ChatCompletionRequest, ChatCompletionResponse
-from template import _get_args, max_analysis_len, max_chat_len, max_quick_reply
+from template import (
+    LEGACY_ALICE_IMAGE_SETTING,
+    LEGACY_ALICE_REPLY_INSTRUCTION,
+    LEGACY_ALICE_SETTING,
+    _get_args,
+    max_analysis_len,
+    max_chat_len,
+    max_quick_reply,
+)
 from utils.websocketutils import WebsocketManager
 
 LOG = logging.getLogger(__name__)
@@ -94,6 +103,20 @@ async def lifespan(app: FastAPI):
     # Eager singletons -- catches obvious config errors on boot.
     get_config_manager()
     get_skill_manager()
+    persona_manager = get_persona_manager()
+    # Seed the legacy "Tendou Arisu" persona on first boot of an
+    # upgraded deployment so existing front-ends keep getting the same
+    # character behaviour without manual file authoring. Idempotent.
+    try:
+        persona_manager.seed_legacy_alice_if_missing(
+            character="tendou_arisu",
+            display_name="天童爱丽丝",
+            setting=LEGACY_ALICE_SETTING,
+            reply_instruction=LEGACY_ALICE_REPLY_INSTRUCTION,
+            image_setting=LEGACY_ALICE_IMAGE_SETTING,
+        )
+    except Exception as e:  # pragma: no cover
+        LOG.warning("Persona seed failed: %r", e)
     # Best-effort migration; never fatal.
     try:
         summary = migrate_all()

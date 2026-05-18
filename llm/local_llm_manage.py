@@ -14,7 +14,19 @@ from embedding.embedding import (process_embedding, vector_search, reorganize_in
                                  add_knowledge)
 from utils.utils import parse_tool_call, remove_action, remove_emotion, remove_trailing_hint
 from utils.image_processor import process_messages
-from template import SETTING, REPLY_INSTRUCTION, IMAGE_SETTING, _TEXT_COMPLETION_CMD, _get_args
+# NOTE: This module is *dead code* preserved only for documentation; it used
+# to bootstrap an in-process vLLM ``AsyncLLMEngine``. The legacy module-level
+# persona strings (SETTING/REPLY_INSTRUCTION/IMAGE_SETTING) have been moved
+# to ``embedding/<character>/persona.json`` and are no longer exported from
+# :mod:`template`. We alias to the LEGACY_* seed material so this file
+# still parses if someone imports it for reference.
+from template import (
+    LEGACY_ALICE_SETTING as SETTING,
+    LEGACY_ALICE_REPLY_INSTRUCTION as REPLY_INSTRUCTION,
+    LEGACY_ALICE_IMAGE_SETTING as IMAGE_SETTING,
+    _TEXT_COMPLETION_CMD,
+    _get_args,
+)
 
 
 def vllm_start_engine(

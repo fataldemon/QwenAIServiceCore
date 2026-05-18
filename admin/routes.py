@@ -35,6 +35,16 @@ Skills:
 * ``GET    /admin/api/skills``                     -- list
 * ``GET    /admin/api/skills/{name}``              -- body
 * ``POST   /admin/api/skills/reload``              -- rescan disk
+
+Personas (per-character system prompt):
+
+* ``GET    /admin/api/personas``                   -- list characters with persona.json
+* ``GET    /admin/api/personas/{character}``       -- detail
+* ``PUT    /admin/api/personas/{character}``       -- upsert
+* ``DELETE /admin/api/personas/{character}``       -- remove
+* ``POST   /admin/api/personas/{character}/preview`` -- render the full system
+  prompt that ``chat_on_setting`` would inject (handy when editing in the UI).
+  Body: ``{"user_text": "...", "information": "..."}``; both optional.
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ from fastapi import FastAPI, HTTPException
 
 from core.config_manager import get_config_manager
 from core.mcp_manager import get_mcp_manager
+from core.persona_manager import get_persona_manager
 from core.skill_manager import get_skill_manager
 from llm.backends.registry import invalidate as invalidate_backend
 
@@ -162,3 +173,79 @@ def register_admin_routes(app: FastAPI) -> None:
     async def reload_skills():
         get_skill_manager().reload()
         return {"ok": True, "skills": get_skill_manager().list_skills()}
+
+    # ------------------- personas -------------------
+
+    @app.get("/admin/api/personas")
+    async def list_personas():
+        pm = get_persona_manager()
+        return {
+            "personas": [
+                {"character": p.character, **p.to_dict()}
+                for p in pm.list_personas()
+            ],
+        }
+
+    @app.get("/admin/api/personas/{character}")
+    async def get_persona(character: str):
+        p = get_persona_manager().get_persona(character)
+        if p is None:
+            raise HTTPException(404, "persona not found")
+        return {"character": p.character, **p.to_dict()}
+
+    @app.put("/admin/api/personas/{character}")
+    async def upsert_persona(character: str, body: Dict[str, Any]):
+        try:
+            p = await get_persona_manager().upsert_persona(character, body)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        return {"character": p.character, **p.to_dict()}
+
+    @app.delete("/admin/api/personas/{character}")
+    async def delete_persona(character: str):
+        ok = await get_persona_manager().delete_persona(character)
+        if not ok:
+            raise HTTPException(404, "persona not found")
+        return {"ok": True}
+
+    @app.post("/admin/api/personas/{character}/preview")
+    async def preview_persona(character: str, body: Dict[str, Any]):
+        """Render the full system prompt that would be injected.
+
+        This is a *dry run*: it calls ``process_embedding`` with whatever
+        ``user_text`` the caller supplies (or an empty string), splices the
+        result into the persona's ``setting``/``reply_instruction``, and
+        returns the final text. No LLM call is made.
+        """
+        from llm.chat import _build_persona_system_prefix
+        from embedding.embedding import process_embedding, remove_reference_url
+
+        user_text = (body.get("user_text") or "").strip()
+        information = body.get("information") or ""
+        embeddings_text = ""
+        if user_text:
+            try:
+                embeddings_text, _ = process_embedding(
+                    content=remove_reference_url(user_text),
+                    top_k=5,
+                    character=character,
+                    client_buffer=[],
+                    max_length=8,
+                    client_information=information,
+                )
+            except Exception as e:
+                # Fall through with empty embeddings so the user still
+                # sees the literal persona text in the preview.
+                return {
+                    "character": character,
+                    "system_prompt": _build_persona_system_prefix(character, ""),
+                    "embeddings_text": "",
+                    "warning": f"process_embedding failed: {e!r}",
+                }
+        return {
+            "character": character,
+            "system_prompt": _build_persona_system_prefix(
+                character, embeddings_text
+            ),
+            "embeddings_text": embeddings_text,
+        }

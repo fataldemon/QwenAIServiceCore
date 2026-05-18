@@ -96,8 +96,55 @@ GET    /admin/api/skills
 GET    /admin/api/skills/<name>
 POST   /admin/api/skills/reload
 
+GET    /admin/api/personas
+GET    /admin/api/personas/<character>
+PUT    /admin/api/personas/<character>     -- body = Persona JSON (see schema below)
+DELETE /admin/api/personas/<character>
+POST   /admin/api/personas/<character>/preview
+                                          -- body = {"user_text": "...", "information": "..."}
+
 POST   /admin/api/abort/<abort_id>
 ```
+
+## Persona config schema
+
+Per-character system prompt; stored at
+``embedding/<character>/persona.json``. All fields except
+``display_name`` are optional.
+
+```json
+{
+  "display_name":        "天童爱丽丝",
+  "setting":             "你是爱丽丝……\n{embeddings}",
+  "reply_instruction":   "\n回答规范：……",
+  "image_setting":       "**你的形象设定**：\n……",
+  "max_chat_len":        15000,
+  "max_analysis_len":    6000,
+  "max_quick_reply":     600,
+  "default_temperature": 0.7,
+  "default_top_p":       0.9
+}
+```
+
+* ``setting`` may contain a ``{embeddings}`` placeholder; ``chat_on_setting``
+  splices the knowledge-base retrieval result there. If the placeholder is
+  absent, retrieved knowledge is appended at the end of ``setting`` instead.
+* Characters **without** a ``persona.json`` are treated as having no
+  persona — the request becomes a generic completion with no character
+  framing. This is intentional: it lets you have a "no role-play" default
+  while still keeping multiple characters around.
+* The legacy "Tendou Arisu" prompt is seeded into
+  ``embedding/tendou_arisu/persona.json`` on first boot (idempotent), so an
+  upgraded deployment continues to behave exactly the same.
+
+To add a new character via the admin UI:
+
+1. Open ``/admin`` → **Personas** tab.
+2. Type the folder name (e.g. ``some_new_one``), fill the fields,
+   click **Save / Update**. The standard subfolders
+   (``setting/``, ``knowledge/``, ``expression/``) are created automatically.
+3. Drop ``.mem`` knowledge / settings files into those subfolders, then
+   restart the service to let the embedding loader pick them up.
 
 ## Provider config schema
 

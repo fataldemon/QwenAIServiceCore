@@ -22,6 +22,7 @@ import gradio as gr  # type: ignore
 
 from core.config_manager import get_config_manager
 from core.mcp_manager import get_mcp_manager
+from core.persona_manager import get_persona_manager
 from core.skill_manager import get_skill_manager
 from llm.backends.registry import invalidate as invalidate_backend
 
@@ -251,6 +252,109 @@ def _read_skill(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Persona helpers
+# ---------------------------------------------------------------------------
+
+
+def _persona_choices() -> List[str]:
+    """Names of characters with a persona.json on disk."""
+    return [p.character for p in get_persona_manager().list_personas()]
+
+
+def _refresh_personas() -> Tuple[List[List[Any]], gr.update]:
+    pm = get_persona_manager()
+    rows = []
+    for p in pm.list_personas():
+        rows.append(
+            [
+                p.character,
+                p.display_name,
+                bool(p.setting),
+                bool(p.reply_instruction),
+                bool(p.image_setting),
+            ]
+        )
+    return rows, gr.update(choices=_persona_choices())
+
+
+def _load_persona(character: str) -> Tuple[str, str, str, str, str]:
+    """Return (display_name, setting, reply_instruction, image_setting, info_md)."""
+    character = (character or "").strip()
+    if not character:
+        return "", "", "", "", ""
+    p = get_persona_manager().get_persona(character)
+    if p is None:
+        return "", "", "", "", f"✗ no persona.json for `{character}` (will create on save)"
+    return (
+        p.display_name,
+        p.setting,
+        p.reply_instruction,
+        p.image_setting,
+        f"✓ loaded `{character}`",
+    )
+
+
+def _save_persona(
+    character: str,
+    display_name: str,
+    setting: str,
+    reply_instruction: str,
+    image_setting: str,
+) -> Tuple[List[List[Any]], gr.update, str]:
+    character = (character or "").strip()
+    if not character:
+        rows, dd = _refresh_personas()
+        return rows, dd, "✗ character name is required"
+    body = {
+        "display_name": display_name,
+        "setting": setting,
+        "reply_instruction": reply_instruction,
+        "image_setting": image_setting,
+    }
+    try:
+        _run(get_persona_manager().upsert_persona(character, body))
+    except Exception as e:
+        rows, dd = _refresh_personas()
+        return rows, dd, f"✗ {e}"
+    rows, dd = _refresh_personas()
+    return rows, dd, f"✓ saved `{character}`"
+
+
+def _delete_persona(character: str) -> Tuple[List[List[Any]], gr.update, str]:
+    character = (character or "").strip()
+    if not character:
+        rows, dd = _refresh_personas()
+        return rows, dd, "✗ character name is required"
+    ok = _run(get_persona_manager().delete_persona(character))
+    rows, dd = _refresh_personas()
+    return rows, dd, ("✓ deleted" if ok else "✗ unknown character")
+
+
+def _preview_persona(character: str, user_text: str) -> str:
+    character = (character or "").strip()
+    if not character:
+        return "(pick a character first)"
+    from llm.chat import _build_persona_system_prefix
+    from embedding.embedding import process_embedding, remove_reference_url
+
+    embeddings_text = ""
+    user_text = (user_text or "").strip()
+    if user_text:
+        try:
+            embeddings_text, _ = process_embedding(
+                content=remove_reference_url(user_text),
+                top_k=5,
+                character=character,
+                client_buffer=[],
+                max_length=8,
+                client_information="",
+            )
+        except Exception as e:  # pragma: no cover -- best-effort preview
+            return f"(process_embedding failed: {e!r})\n\n" + _build_persona_system_prefix(character, "")
+    return _build_persona_system_prefix(character, embeddings_text)
+
+
+# ---------------------------------------------------------------------------
 # Build the UI
 # ---------------------------------------------------------------------------
 
@@ -375,6 +479,85 @@ def build_admin_ui() -> "gr.Blocks":
             sk_view.click(_read_skill, [sk_name], [sk_body])
             sk_reload.click(lambda: _reload_skills(), None, [sk_table, sk_status])
             ui.load(lambda: _refresh_skills(), None, [sk_table, sk_status])
+
+        # ---------- Personas ----------
+        with gr.Tab("Personas"):
+            gr.Markdown(
+                "Per-character system prompt. Stored at "
+                "`embedding/<character>/persona.json`. "
+                "`setting` may contain a `{embeddings}` placeholder — that's "
+                "where retrieved knowledge will be spliced in at request time."
+            )
+            pe_table = gr.Dataframe(
+                headers=["character", "display_name", "has_setting", "has_reply_instruction", "has_image_setting"],
+                interactive=False,
+                wrap=True,
+            )
+            with gr.Row():
+                pe_pick = gr.Dropdown(
+                    choices=_persona_choices(),
+                    label="Existing characters",
+                    allow_custom_value=False,
+                )
+                pe_load = gr.Button("Load selected")
+                pe_refresh = gr.Button("Refresh")
+            pe_character = gr.Textbox(
+                label="character (folder name under embedding/)",
+                placeholder="e.g. tendou_arisu",
+            )
+            pe_display_name = gr.Textbox(label="display_name")
+            pe_setting = gr.Textbox(
+                label="setting (system prompt; may include {embeddings})",
+                lines=12,
+            )
+            pe_reply_instruction = gr.Textbox(
+                label="reply_instruction (appended after setting)",
+                lines=4,
+            )
+            pe_image_setting = gr.Textbox(
+                label="image_setting (optional figure framing)",
+                lines=4,
+            )
+            with gr.Row():
+                pe_save = gr.Button("Save / Update")
+                pe_delete = gr.Button("Delete by name", variant="stop")
+            with gr.Accordion("Preview rendered system prompt", open=False):
+                pe_preview_input = gr.Textbox(
+                    label="simulated user message (used to call process_embedding)",
+                    lines=2,
+                )
+                pe_preview_btn = gr.Button("Render preview")
+                pe_preview_out = gr.Code(label="rendered system prompt", lines=20)
+            pe_message = gr.Markdown()
+
+            pe_load.click(
+                _load_persona,
+                [pe_pick],
+                [
+                    pe_display_name,
+                    pe_setting,
+                    pe_reply_instruction,
+                    pe_image_setting,
+                    pe_message,
+                ],
+            ).then(
+                lambda c: c,
+                [pe_pick],
+                [pe_character],
+            )
+            pe_save.click(
+                _save_persona,
+                [pe_character, pe_display_name, pe_setting, pe_reply_instruction, pe_image_setting],
+                [pe_table, pe_pick, pe_message],
+            )
+            pe_delete.click(
+                _delete_persona,
+                [pe_character],
+                [pe_table, pe_pick, pe_message],
+            )
+            pe_refresh.click(_refresh_personas, None, [pe_table, pe_pick])
+            pe_preview_btn.click(_preview_persona, [pe_character, pe_preview_input], [pe_preview_out])
+            ui.load(_refresh_personas, None, [pe_table, pe_pick])
 
     return ui
 

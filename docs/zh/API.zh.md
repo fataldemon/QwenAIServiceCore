@@ -90,8 +90,52 @@ GET    /admin/api/skills
 GET    /admin/api/skills/<name>
 POST   /admin/api/skills/reload
 
+GET    /admin/api/personas
+GET    /admin/api/personas/<character>
+PUT    /admin/api/personas/<character>     -- body 为 Persona JSON（见下面 schema）
+DELETE /admin/api/personas/<character>
+POST   /admin/api/personas/<character>/preview
+                                          -- body = {"user_text": "...", "information": "..."}
+
 POST   /admin/api/abort/<abort_id>
 ```
+
+## Persona（角色人设）配置结构
+
+每个角色一份系统提示词，存放于 ``embedding/<character>/persona.json``。
+除 ``display_name`` 外字段均可选。
+
+```json
+{
+  "display_name":        "天童爱丽丝",
+  "setting":             "你是爱丽丝……\n{embeddings}",
+  "reply_instruction":   "\n回答规范：……",
+  "image_setting":       "**你的形象设定**：\n……",
+  "max_chat_len":        15000,
+  "max_analysis_len":    6000,
+  "max_quick_reply":     600,
+  "default_temperature": 0.7,
+  "default_top_p":       0.9
+}
+```
+
+* ``setting`` 中可以包含 ``{embeddings}`` 占位符，``chat_on_setting`` 会
+  把知识库召回结果填进去；如果没有占位符，召回结果会自动追加到
+  ``setting`` 末尾。
+* **没有 `persona.json` 的角色**会被视作"没有人设"——请求退化为普通补全，
+  不注入角色框架。这是有意保留的"通用助手"行为。
+* 旧版的"天童爱丽丝"提示词在首次启动后会被自动写入
+  ``embedding/tendou_arisu/persona.json``（幂等），所以从旧版升级时
+  现有角色的表现完全不变，不需要任何人工搬运。
+
+在 admin 页面里新增一个角色：
+
+1. 打开 ``/admin`` → **Personas** Tab；
+2. 在 character 一栏填入新的目录名（比如 ``some_new_one``），编辑各
+   字段后点 **Save / Update**。``setting/`` / ``knowledge/`` /
+   ``expression/`` 三个子目录会自动建出来；
+3. 把 ``.mem`` 知识/设定文件丢进对应子目录，然后重启服务让 embedding
+   loader 把新文件吃进去。
 
 ## Provider 配置结构
 

@@ -42,6 +42,7 @@ from core.content_normalizer import (
     normalize_content,
     to_openai_content,
 )
+from core.persona_manager import Persona, get_persona_manager
 from embedding.embedding import (
     add_knowledge,
     check_emotion,
@@ -57,7 +58,10 @@ from models.base import (
     ChatMessage,
     DeltaMessage,
 )
-from template import REPLY_INSTRUCTION, SETTING
+# NOTE: Per-character SETTING / REPLY_INSTRUCTION used to live in
+# ``template.py`` as hard-coded strings tied to the "天童爱丽丝" persona.
+# They now come from ``embedding/<character>/persona.json`` via
+# :mod:`core.persona_manager`. ``template.py`` no longer exports those.
 
 from .backends import get_backend
 from .backends.base import GenerationResult, StreamChunk
@@ -149,6 +153,42 @@ def _prepare_messages(
         out.append({"role": "system", "content": "\n\n".join(system_parts)})
     out.extend(converted)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Persona-driven system prompt
+# ---------------------------------------------------------------------------
+
+
+def _build_persona_system_prefix(character: str, embeddings_text: str) -> str:
+    """Build the system prompt prefix from the character's ``persona.json``.
+
+    If the character has no persona on disk we return an empty string -- the
+    request becomes a generic completion without any character framing.
+    This is intentional: the legacy hard-coded Alice prompt is gone, every
+    persona is now data the operator can edit at runtime.
+
+    ``setting`` may contain a ``{embeddings}`` placeholder; if it does, we
+    fill it with the retrieved knowledge text. If it doesn't, the retrieved
+    knowledge is appended verbatim at the end of the prefix.
+    """
+    persona = get_persona_manager().get_persona(character)
+    if persona is None:
+        return ""
+    setting = persona.setting or ""
+    if setting:
+        if "{embeddings}" in setting:
+            try:
+                setting = setting.format(embeddings=embeddings_text)
+            except (KeyError, IndexError):
+                # Malformed format spec -- fall back to literal + suffix so
+                # the user at least gets *something* useful.
+                setting = setting + "\n" + (embeddings_text or "")
+        elif embeddings_text:
+            setting = setting + "\n" + embeddings_text
+    elif embeddings_text:
+        setting = embeddings_text
+    return setting + (persona.reply_instruction or "")
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +347,9 @@ async def chat_on_setting(
         except Exception as e:
             LOG.warning("process_embedding failed: %r", e)
             embeddings_text = ""
-    system_prefix = SETTING.format(embeddings=embeddings_text) + REPLY_INSTRUCTION
+    system_prefix = _build_persona_system_prefix(
+        request.character or "", embeddings_text
+    )
 
     messages = _prepare_messages(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
@@ -380,7 +422,9 @@ async def chat_on_setting_stream(
         except Exception as e:
             LOG.warning("process_embedding failed: %r", e)
 
-    system_prefix = SETTING.format(embeddings=embeddings_text) + REPLY_INSTRUCTION
+    system_prefix = _build_persona_system_prefix(
+        request.character or "", embeddings_text
+    )
     messages = _prepare_messages(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
