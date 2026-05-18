@@ -1,0 +1,28 @@
+{
+  "servers": {
+    "filesystem_example": {
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {},
+      "description": "Example: a local stdio MCP server (filesystem access)."
+    },
+    "remote_sse_example": {
+      "enabled": false,
+      "transport": "sse",
+      "url": "http://127.0.0.1:9001/sse",
+      "headers": {},
+      "description": "Example: a remote SSE MCP server."
+    },
+    "remote_http_example": {
+      "enabled": false,
+      "transport": "streamable_http",
+      "url": "http://127.0.0.1:9002/mcp",
+      "headers": {},
+      "description": "Example: a remote Streamable-HTTP MCP server."
+    }
+  },
+  "tool_call_mode": "passthrough",
+  "tool_call_timeout": 30
+}

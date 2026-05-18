@@ -1,0 +1,51 @@
+{
+  "active": "local_vllm",
+  "providers": {
+    "local_vllm": {
+      "type": "openai_compatible",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "api_key": "EMPTY",
+      "model": "Qwen3.6-27B",
+      "supports_vision": true,
+      "supports_audio": true,
+      "supports_video": true,
+      "extra_body": {
+        "mm_processor_kwargs": {
+          "fps": 2
+        }
+      },
+      "request_timeout": 600,
+      "stream_chunk_timeout": 60,
+      "prefetch_media": false,
+      "description": "Local vLLM server started by `vllm serve`."
+    },
+    "dashscope": {
+      "type": "openai_compatible",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "sk-REPLACE_ME",
+      "model": "qwen3-vl-plus",
+      "supports_vision": true,
+      "supports_audio": false,
+      "supports_video": true,
+      "extra_body": {},
+      "request_timeout": 600,
+      "stream_chunk_timeout": 60,
+      "prefetch_media": false,
+      "description": "Aliyun DashScope OpenAI-compatible endpoint."
+    },
+    "deepseek": {
+      "type": "openai_compatible",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-REPLACE_ME",
+      "model": "deepseek-chat",
+      "supports_vision": false,
+      "supports_audio": false,
+      "supports_video": false,
+      "extra_body": {},
+      "request_timeout": 300,
+      "stream_chunk_timeout": 60,
+      "prefetch_media": false,
+      "description": "DeepSeek text-only model."
+    }
+  }
+}
