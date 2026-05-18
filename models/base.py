@@ -25,9 +25,10 @@ class MultimodalContent(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: Literal["user", "assistant", "system", "function"]
+    role: Literal["user", "assistant", "system", "function", "tool"]
     content: Optional[str]
     function_call: Optional[Dict] = None
+    tool_calls: Optional[List[Dict]] = None
 
 
 class DeltaMessage(BaseModel):

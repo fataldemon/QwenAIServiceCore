@@ -148,6 +148,11 @@ def _prepare_messages(
 
     ``system_prefix``, if non-empty, is prepended as a system message at index
     0. Any incoming ``role="system"`` message is concatenated to it.
+
+    Legacy ``role="function"`` messages are converted to ``role="tool"`` with
+    content wrapped in ``<tool_response>...</tool_response>`` tags, matching
+    the Qwen3.6 chat template expectations. Legacy ``function_call`` on
+    assistant messages is converted to the ``tool_calls`` format.
     """
     supports_vision, supports_audio, supports_video = _provider_supports_media(provider_cfg)
     prefetch = bool(provider_cfg.prefetch_media)
@@ -162,6 +167,25 @@ def _prepare_messages(
             # messages (some providers reject that).
             if isinstance(m.content, str):
                 system_parts.append(m.content)
+            continue
+
+        # --- Legacy function-call support (Qwen3.6 template uses ``tool`` role) ---
+        if m.role == "function":
+            # Convert legacy ``function`` role to ``tool`` role with
+            # ``<tool_response>`` wrapper expected by Qwen3.6 chat template.
+            text_content = ""
+            if isinstance(m.content, str):
+                text_content = m.content
+            elif isinstance(m.content, list):
+                text_parts = []
+                for part in m.content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                text_content = " ".join(text_parts)
+            converted.append({
+                "role": "tool",
+                "content": f"<tool_response>\n{text_content}\n</tool_response>",
+            })
             continue
 
         parts = normalize_content(m.content)
@@ -180,8 +204,19 @@ def _prepare_messages(
                 filtered.append(p)
         content_payload = to_openai_content(filtered, prefetch_files=prefetch)
         msg: Dict[str, Any] = {"role": m.role, "content": content_payload}
+        # Convert legacy ``function_call`` to ``tool_calls`` (Qwen3.6 format).
         if m.function_call:
-            msg["function_call"] = m.function_call
+            if "tool_calls" not in msg:
+                msg["tool_calls"] = []
+            msg["tool_calls"].append({
+                "type": "function",
+                "function": {
+                    "name": m.function_call.get("name", ""),
+                    "arguments": m.function_call.get("arguments", ""),
+                },
+            })
+        if m.tool_calls:
+            msg["tool_calls"] = m.tool_calls
         converted.append(msg)
 
     out: List[Dict[str, Any]] = []
