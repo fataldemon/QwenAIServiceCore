@@ -491,7 +491,7 @@ def _ref_to_openai_url(
             # Prefetch failed -- fall back to the original URL so the request
             # doesn't completely fail; vLLM may still be able to fetch it.
             LOG.debug("Prefetch failed for %s, falling back to raw URL", url)
-        return url
+        return None
     if source == "file":
         path = ref.get("path", "")
         if prefetch and path and os.path.exists(path):
@@ -538,6 +538,11 @@ def to_openai_content(
             url = _ref_to_openai_url(
                 p.ref or {}, fallback_mime="image/png", prefetch=prefetch_files
             )
+            if url is None:
+                # 可选：添加一条文本提示，说明图片无法加载
+                # 如果不想添加任何东西，就跳过（continue）
+                out.append({"type": "text", "text": "[图片无法加载]"})
+                continue
             out.append({"type": "image_url", "image_url": {"url": url}})
         elif p.kind == "audio":
             ref = p.ref or {}
@@ -554,12 +559,22 @@ def to_openai_content(
                 url = _ref_to_openai_url(
                     ref, fallback_mime="audio/wav", prefetch=prefetch_files
                 )
+                if url is None:
+                    # 可选：添加一条文本提示，说明音频无法加载
+                    # 如果不想添加任何东西，就跳过（continue）
+                    out.append({"type": "text", "text": "[音频无法加载]"})
+                    continue
                 out.append({"type": "audio_url", "audio_url": {"url": url}})
         elif p.kind == "video":
             ref = p.ref or {}
             url = _ref_to_openai_url(
                 ref, fallback_mime="video/mp4", prefetch=prefetch_files
             )
+            if url is None:
+                # 可选：添加一条文本提示，说明视频无法加载
+                # 如果不想添加任何东西，就跳过（continue）
+                out.append({"type": "text", "text": "[视频无法加载]"})
+                continue
             video_part: Dict[str, Any] = {"type": "video_url", "video_url": {"url": url}}
             for k in ("fps", "max_frames"):
                 if k in p.options:
@@ -570,6 +585,11 @@ def to_openai_content(
             url = _ref_to_openai_url(
                 p.ref or {}, fallback_mime="image/gif", prefetch=prefetch_files
             )
+            if url is None:
+                # 可选：添加一条文本提示，说明gif无法加载
+                # 如果不想添加任何东西，就跳过（continue）
+                out.append({"type": "text", "text": "[gif无法加载]"})
+                continue
             out.append({"type": "image_url", "image_url": {"url": url}})
     return out
 
