@@ -94,14 +94,29 @@ def _refresh_providers() -> Tuple[List[List[Any]], str]:
     return rows, _active_provider_markdown()
 
 
-def _provider_table_select(evt: gr.SelectData, table: List[List[Any]]) -> Tuple:
-    """Fill the edit form when a provider table row is clicked."""
-    if not table or evt.index is None:
-        return ("", "", "", "", "", "", "", "", "", "")
+def _provider_table_select(evt: gr.SelectData, table) -> Tuple:
+    """Fill the edit form when a provider table row is clicked.
+
+    Compatible with both Gradio 4.x (list of lists) and Gradio 5.x (pandas DataFrame).
+    """
+    if evt.index is None:
+        return ("", "", "", "", "", "", "", "", "", "", "")
     row_idx = evt.index[0]
-    if row_idx >= len(table):
-        return ("", "", "", "", "", "", "", "", "", "")
-    row = table[row_idx]
+
+    # Extract the selected row — handle both DataFrame (Gradio 5.x) and list (Gradio 4.x)
+    try:
+        import pandas as pd
+        if isinstance(table, pd.DataFrame):
+            if row_idx >= len(table):
+                return ("", "", "", "", "", "", "", "", "", "", "")
+            row = table.iloc[row_idx].tolist()
+        else:
+            if row_idx >= len(table):
+                return ("", "", "", "", "", "", "", "", "", "", "")
+            row = table[row_idx]
+    except Exception:
+        return ("", "", "", "", "", "", "", "", "", "", "")
+
     # columns: active, name, type, model, base_url, vision, audio, video, prefetch, description
     return (
         row[1] if len(row) > 1 else "",     # name
