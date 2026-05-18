@@ -471,7 +471,7 @@ def _ref_to_openai_url(
     *,
     fallback_mime: str,
     prefetch: bool = False,
-) -> str:
+) -> Optional[str]:
     """Turn a ``ref`` into the URL string used by OpenAI-style content parts.
 
     When ``prefetch`` is true, ``file`` refs are inlined as base64 data URLs,
@@ -513,6 +513,32 @@ def _ref_to_openai_url(
     return ""
 
 
+def _looks_like_gif(part: ContentPart) -> bool:
+    """Return True if the ContentPart likely refers to a GIF image."""
+    ref = part.ref or {}
+    source = ref.get("source")
+    if source == "url":
+        url = ref.get("url", "")
+        path = url.split("?")[0].split("#")[0]
+        # 检查 URL 路径是否以 .gif 结尾（不区分大小写）
+        if path.lower().endswith(".gif"):
+            return True
+        # 可选：如果是腾讯 CDN 且没有后缀，可以不做更深的检测（避免网络请求）
+        # 需要更精确的话，可以在这里发送 HEAD 请求检查 Content-Type，但会增加延迟
+        return False
+    if source == "file":
+        path = ref.get("path", "")
+        return path.lower().endswith(".gif")
+    if source == "base64":
+        data = ref.get("data", "")
+        try:
+            raw = base64.b64decode(data[:64])   # 只解码前 64 字符
+            return raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a")
+        except Exception:
+            return False
+    return False
+
+
 def to_openai_content(
     parts: Iterable[ContentPart],
     *,
@@ -535,34 +561,48 @@ def to_openai_content(
         if p.kind == "text":
             out.append({"type": "text", "text": p.text or ""})
         elif p.kind == "image":
-            url = _ref_to_openai_url(
-                p.ref or {}, fallback_mime="image/png", prefetch=prefetch_files
-            )
-            if url is None:
-                # 可选：添加一条文本提示，说明图片无法加载
-                # 如果不想添加任何东西，就跳过（continue）
-                out.append({"type": "text", "text": "[图片无法加载]"})
-                continue
-            out.append({"type": "image_url", "image_url": {"url": url}})
+            # 自动检测 GIF → 转换为 video
+            if _looks_like_gif(p):
+                url = _ref_to_openai_url(
+                    p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
+                )
+                if url is None:
+                    if fallback_text:
+                        out.append({"type": "text", "text": fallback_text})
+                    continue
+                video_part = {"type": "video_url", "video_url": {"url": url}}
+                # 透传 max_frames / fps 参数（如果存在）
+                for k in ("max_frames", "fps"):
+                    if k in p.options:
+                        video_part["video_url"][k] = p.options[k]
+                out.append(video_part)
+            else:
+                # 普通图片
+                url = _ref_to_openai_url(
+                    p.ref or {}, fallback_mime="image/png", prefetch=prefetch_files
+                )
+                if url is None:
+                    if fallback_text:
+                        out.append({"type": "text", "text": fallback_text})
+                    continue
+                out.append({"type": "image_url", "image_url": {"url": url}})
         elif p.kind == "audio":
+            # 同样需要处理 url is None 的情况
             ref = p.ref or {}
             if ref.get("source") == "base64":
                 mime = ref.get("mime") or "audio/wav"
                 fmt = mime.split("/", 1)[-1] if "/" in mime else (p.options.get("format") or "wav")
-                out.append(
-                    {
-                        "type": "input_audio",
-                        "input_audio": {"data": ref.get("data", ""), "format": fmt},
-                    }
-                )
+                out.append({
+                    "type": "input_audio",
+                    "input_audio": {"data": ref.get("data", ""), "format": fmt},
+                })
             else:
                 url = _ref_to_openai_url(
                     ref, fallback_mime="audio/wav", prefetch=prefetch_files
                 )
                 if url is None:
-                    # 可选：添加一条文本提示，说明音频无法加载
-                    # 如果不想添加任何东西，就跳过（continue）
-                    out.append({"type": "text", "text": "[音频无法加载]"})
+                    if fallback_text:
+                        out.append({"type": "text", "text": fallback_text})
                     continue
                 out.append({"type": "audio_url", "audio_url": {"url": url}})
         elif p.kind == "video":
@@ -571,26 +611,28 @@ def to_openai_content(
                 ref, fallback_mime="video/mp4", prefetch=prefetch_files
             )
             if url is None:
-                # 可选：添加一条文本提示，说明视频无法加载
-                # 如果不想添加任何东西，就跳过（continue）
-                out.append({"type": "text", "text": "[视频无法加载]"})
+                if fallback_text:
+                    out.append({"type": "text", "text": fallback_text})
                 continue
-            video_part: Dict[str, Any] = {"type": "video_url", "video_url": {"url": url}}
+            video_part = {"type": "video_url", "video_url": {"url": url}}
             for k in ("fps", "max_frames"):
                 if k in p.options:
                     video_part["video_url"][k] = p.options[k]
             out.append(video_part)
-        # ``gif`` should have been expanded already; if not, treat as image.
         elif p.kind == "gif":
+            # 如果还有遗留的 gif kind，同样转为 video
             url = _ref_to_openai_url(
-                p.ref or {}, fallback_mime="image/gif", prefetch=prefetch_files
+                p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
             )
             if url is None:
-                # 可选：添加一条文本提示，说明gif无法加载
-                # 如果不想添加任何东西，就跳过（continue）
-                out.append({"type": "text", "text": "[gif无法加载]"})
+                if fallback_text:
+                    out.append({"type": "text", "text": fallback_text})
                 continue
-            out.append({"type": "image_url", "image_url": {"url": url}})
+            video_part = {"type": "video_url", "video_url": {"url": url}}
+            for k in ("max_frames", "fps"):
+                if k in p.options:
+                    video_part["video_url"][k] = p.options[k]
+            out.append(video_part)
     return out
 
 
