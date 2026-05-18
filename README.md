@@ -1,5 +1,7 @@
 # QwenAIServiceCore — dev branch
 
+> 中文文档见 [`docs/zh/README.md`](docs/zh/README.md)。
+
 A FastAPI gateway that fronts an OpenAI-compatible LLM service (typically a
 local `vllm serve` process, or any remote provider such as DashScope /
 DeepSeek / OpenAI) and adds character-aware features that the existing
