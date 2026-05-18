@@ -34,11 +34,6 @@ def vllm_start_engine(
             tensor_parallel_size=tensor_parallel_size,
             enable_sleep_mode=True,
             enable_chunked_prefill=True,
-            # speculative_config={
-            #     "method": "qwen3_next_mtp",  # 若使用Qwen3模型，请改为 "qwen3_next_mtp"
-            #     "num_speculative_tokens": 1,  # 投机深度
-            #     # "disable_padded_drafter_batch": False   # 可选，默认为 False
-            # },
         )
     else:
         engine_args = AsyncEngineArgs(
@@ -51,11 +46,6 @@ def vllm_start_engine(
             enable_lora=True,
             enable_sleep_mode=True,
             enable_chunked_prefill=True,
-            # speculative_config={
-            #     "method": "qwen3_next_mtp",  # 若使用Qwen3模型，请改为 "qwen3_next_mtp"
-            #     "num_speculative_tokens": 1,  # 投机深度为
-            #     # "disable_padded_drafter_batch": False   # 可选，默认为 False
-            # },
         )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine

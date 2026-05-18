@@ -72,7 +72,7 @@ app.add_middleware(
 #
 # TODO: Use real system role when the model is ready.
 #
-@app.post("/v1/assistant/completions", response_model=ChatCompletionResponse)
+@app.post("/assistant/v1/chat/completions", response_model=ChatCompletionResponse)
 async def completion_without_lora(request: ChatCompletionRequest):
     global autoProcessor
 

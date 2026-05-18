@@ -201,3 +201,33 @@ def get_function_description(function: Dict, lang: Literal['en', 'zh']) -> str:
                             description_for_model=function['description'],
                             parameters=json.dumps(function['parameters'], ensure_ascii=False),
                             args_format=args_format).rstrip()
+
+
+def escape_jinja_content(text: str) -> str:
+    """将字符串中的 Jinja2 特殊语法转义为纯文本。
+    注意：顺序很重要，避免多次转义。
+    """
+    if not isinstance(text, str):
+        return text
+    # 转义花括号块
+    text = text.replace('{{', '\\{{')
+    text = text.replace('}}', '\\}}')
+    # 转义语句块
+    text = text.replace('{%', '\\{%')
+    text = text.replace('%}', '\\%}')
+    # 转义注释块
+    text = text.replace('{#', '\\{#')
+    text = text.replace('#}', '\\#}')
+    return text
+
+
+def normalize_message(msg):
+    """将 ChatMessage 对象或 dict 统一转为字典，并转义 content 中的 Jinja2 语法"""
+    if isinstance(msg, dict):
+        d = {k: v for k, v in msg.items() if v is not None}
+    else:
+        # 假设是 ChatMessage 对象
+        d = {k: v for k, v in msg.__dict__.items() if v is not None}
+    if 'content' in d and isinstance(d['content'], str):
+        d['content'] = escape_jinja_content(d['content'])
+    return d
