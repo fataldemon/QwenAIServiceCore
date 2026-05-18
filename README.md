@@ -79,9 +79,13 @@ boot. They contain API keys and are git-ignored.
 
 ## Documentation
 
+* [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — developer guide:
+  repository layout, request data flow, and a "I want to change X — where
+  do I look?" cheat sheet. **Start here if you're going to modify code.**
 * [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) — operational checklist:
   rolling back to the legacy in-process branch, adding providers, etc.
-* [`docs/API.md`](docs/API.md) — HTTP API reference (completion + admin).
+* [`docs/API.md`](docs/API.md) — HTTP API reference (completion + admin +
+  persona schema).
 * [`docs/MCP_AND_SKILLS.md`](docs/MCP_AND_SKILLS.md) — how MCP servers and
   skills plug in.
 * [`docs/EMBEDDING_DATA_SCHEMA.md`](docs/EMBEDDING_DATA_SCHEMA.md) — the

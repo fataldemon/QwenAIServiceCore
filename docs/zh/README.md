@@ -82,3 +82,16 @@ JSON 形式的管理接口在 `/admin/api/*`，详见
 
 两个文件首次启动时会从同名的 `*.example.json` 拷贝生成，内含 API Key，
 已在 `.gitignore` 中。
+
+## 文档索引
+
+* [`DEVELOPMENT.zh.md`](DEVELOPMENT.zh.md) — 开发维护文档：项目结构、
+  请求数据流、以及"我要改 X 应该去看哪里"的速查表。
+  **要改代码的话先看这一篇。**
+* [`MAINTENANCE.zh.md`](MAINTENANCE.zh.md) — 运维清单：如何回滚到旧
+  in-process 版本、如何安全地切上下游、加 Provider 等。
+* [`API.zh.md`](API.zh.md) — HTTP API 参考（聊天 + 管理 + Persona schema）。
+* [`MCP_AND_SKILLS.zh.md`](MCP_AND_SKILLS.zh.md) — MCP 服务器与 Skill
+  模块的接入方式（如对应英文版存在）。
+* [`../EMBEDDING_DATA_SCHEMA.md`](../EMBEDDING_DATA_SCHEMA.md) — 新版
+  `materials.jsonl` 数据结构以及从旧 pickle 的迁移说明。
