@@ -29,10 +29,13 @@ are accepted and ignored -- this keeps a smaller diff in ``main.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from core.config_manager import get_config_manager
@@ -71,6 +74,39 @@ LOG = logging.getLogger(__name__)
 # In-flight requests, keyed by ``abort_id`` (set by the client). Used by
 # :func:`abort_request` to flip the cooperative abort flag on the backend.
 _active_requests: Dict[str, Tuple[str, str]] = {}  # abort_id -> (provider_name, request_id)
+
+# Chat log file path (rotated on restart; max ~10 MB before truncation).
+_CHAT_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+_CHAT_LOG_FILE = os.path.join(_CHAT_LOG_DIR, "chat_log.jsonl")
+_CHAT_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def _append_chat_log(entry: Dict[str, Any]) -> None:
+    """Append one JSON line to the chat log file.
+
+    The file is truncated to roughly ``_CHAT_LOG_MAX_BYTES`` when it grows
+    beyond that limit (simple truncation -- we drop the oldest entries).
+    """
+    try:
+        os.makedirs(_CHAT_LOG_DIR, exist_ok=True)
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        # Check size and truncate if needed before appending.
+        if os.path.isfile(_CHAT_LOG_FILE):
+            try:
+                size = os.path.getsize(_CHAT_LOG_FILE)
+                if size > _CHAT_LOG_MAX_BYTES:
+                    # Keep roughly the last 75% of the file.
+                    with open(_CHAT_LOG_FILE, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    keep = int(len(lines) * 0.75)
+                    with open(_CHAT_LOG_FILE, "w", encoding="utf-8") as f:
+                        f.writelines(lines[-keep:])
+            except OSError:
+                pass
+        with open(_CHAT_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        LOG.debug("Failed to write chat log: %r", e)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +414,25 @@ async def chat_on_setting(
     if result.reasoning and not thought:
         thought = result.reasoning
     answer = _postprocess_answer(answer, request.character or "")
+
+    # Log the conversation turn to the chat log file.
+    try:
+        log_entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "character": request.character or "",
+            "user": user_text,
+            "assistant": answer,
+            "thought": thought,
+            "finish_reason": result.finish_reason,
+            "tokens": {
+                "prompt": result.prompt_tokens,
+                "completion": result.completion_tokens,
+            },
+        }
+        _append_chat_log(log_entry)
+    except Exception:
+        pass  # Logging failure must never break the response.
+
     return ChatCompletionResponseChoice(
         index=index,
         thought=thought,
@@ -446,6 +501,8 @@ async def chat_on_setting_stream(
         ],
     )
 
+    collected_text: List[str] = []
+
     try:
         it = await backend.generate_stream(
             messages=messages,
@@ -457,6 +514,8 @@ async def chat_on_setting_stream(
             else None,
         )
         async for chunk in it:  # type: StreamChunk
+            if chunk.text:
+                collected_text.append(chunk.text)
             if not chunk.text and not chunk.finish_reason:
                 continue
             yield ChatCompletionResponse(
@@ -477,6 +536,25 @@ async def chat_on_setting_stream(
     finally:
         if request.abort_id:
             _active_requests.pop(request.abort_id, None)
+
+    # Log the full conversation turn after streaming ends.
+    try:
+        full_answer = "".join(collected_text).strip()
+        thought, clean_answer = _split_thought_and_answer(full_answer)
+        if not thought:
+            thought = ""
+        log_entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "character": request.character or "",
+            "user": user_text,
+            "assistant": clean_answer or full_answer,
+            "thought": thought,
+            "finish_reason": "stop",
+            "tokens": {},
+        }
+        _append_chat_log(log_entry)
+    except Exception:
+        pass  # Logging failure must never break the response.
 
 
 # ---------------------------------------------------------------------------

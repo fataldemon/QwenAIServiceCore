@@ -7,7 +7,7 @@ Python managers directly is simpler and avoids needing a self-targeted HTTP
 client just to render a form.
 
 The UI is intentionally minimal: one tab per administrable subject
-(providers / MCP servers / skills). Anything more ambitious belongs in a
+(providers / MCP servers / skills). Anything more ambitious belong in a
 proper SPA which the existing chat front-end already provides for the chat
 side; this surface is purely for operators.
 """
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Dict, List, Tuple
 
 import gradio as gr  # type: ignore
@@ -25,6 +26,17 @@ from core.mcp_manager import get_mcp_manager
 from core.persona_manager import get_persona_manager
 from core.skill_manager import get_skill_manager
 from llm.backends.registry import invalidate as invalidate_backend
+
+# Constants for knowledge-base and log paths.
+_EMBEDDING_ROOT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "embedding"
+)
+_CHAT_LOG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "logs", "chat_log.jsonl"
+)
+
+# Valid knowledge subjects
+_KNOWLEDGE_SUBJECTS = ["setting", "knowledge", "expression"]
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +62,16 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 
 
+def _active_provider_markdown() -> str:
+    cm = get_config_manager()
+    active_char = cm.get_active_character()
+    char_info = f" | Character: `{active_char}`" if active_char else ""
+    return (
+        f"Active: **{cm.get_active_provider_name() or '(none)'}**"
+        f"{char_info}"
+    )
+
+
 def _refresh_providers() -> Tuple[List[List[Any]], str]:
     cm = get_config_manager()
     rows = []
@@ -65,10 +87,35 @@ def _refresh_providers() -> Tuple[List[List[Any]], str]:
                 p.supports_vision,
                 p.supports_audio,
                 p.supports_video,
+                p.prefetch_media,
                 p.description,
             ]
         )
-    return rows, f"Active: {cm.get_active_provider_name() or '(none)'}"
+    return rows, _active_provider_markdown()
+
+
+def _provider_table_select(evt: gr.SelectData, table: List[List[Any]]) -> Tuple:
+    """Fill the edit form when a provider table row is clicked."""
+    if not table or evt.index is None:
+        return ("", "", "", "", "", "", "", "", "", "")
+    row_idx = evt.index[0]
+    if row_idx >= len(table):
+        return ("", "", "", "", "", "", "", "", "", "")
+    row = table[row_idx]
+    # columns: active, name, type, model, base_url, vision, audio, video, prefetch, description
+    return (
+        row[1] if len(row) > 1 else "",     # name
+        row[4] if len(row) > 4 else "",     # base_url
+        row[3] if len(row) > 3 else "",     # model
+        "",                                 # api_key (not shown in table, leave empty)
+        row[2] if len(row) > 2 else "",     # type
+        bool(row[5]) if len(row) > 5 else False,  # vision
+        bool(row[6]) if len(row) > 6 else False,  # audio
+        bool(row[7]) if len(row) > 7 else False,  # video
+        bool(row[8]) if len(row) > 8 else False,  # prefetch
+        "",                                 # extra_body JSON (leave empty)
+        row[9] if len(row) > 9 else "",     # description
+    )
 
 
 def _save_provider(
@@ -76,6 +123,7 @@ def _save_provider(
     base_url: str,
     api_key: str,
     model: str,
+    ptype: str,
     supports_vision: bool,
     supports_audio: bool,
     supports_video: bool,
@@ -95,7 +143,7 @@ def _save_provider(
         return rows, active, f"✗ bad extra_body JSON: {e}"
 
     body = {
-        "type": "openai_compatible",
+        "type": ptype.strip() or "openai_compatible",
         "base_url": base_url.strip(),
         "api_key": api_key.strip(),
         "model": model.strip(),
@@ -141,7 +189,6 @@ def _delete_provider(name: str) -> Tuple[List[List[Any]], str, str]:
 # ---------------------------------------------------------------------------
 # MCP helpers
 # ---------------------------------------------------------------------------
-
 
 def _refresh_mcp() -> Tuple[List[List[Any]], str]:
     cm = get_config_manager()
@@ -277,21 +324,35 @@ def _refresh_personas() -> Tuple[List[List[Any]], gr.update]:
     return rows, gr.update(choices=_persona_choices())
 
 
-def _load_persona(character: str) -> Tuple[str, str, str, str, str]:
+def _load_persona(character: str) -> Tuple:
     """Return (display_name, setting, reply_instruction, image_setting, info_md)."""
     character = (character or "").strip()
     if not character:
-        return "", "", "", "", ""
+        return tuple("" for _ in range(9))
     p = get_persona_manager().get_persona(character)
+    ac = get_config_manager().get_active_character()
+    is_active = (ac == character)
+    active_label = " **[active character]**" if is_active else ""
     if p is None:
-        return "", "", "", "", f"✗ no persona.json for `{character}` (will create on save)"
+        return ("", "", "", "", "", "", "", "", f"✗ no persona.json for `{character}` (will create on save){active_label}")
     return (
         p.display_name,
         p.setting,
         p.reply_instruction,
         p.image_setting,
-        f"✓ loaded `{character}`",
+        str(p.max_chat_len or ""),
+        str(p.max_analysis_len or ""),
+        str(p.max_quick_reply or ""),
+        str(p.default_temperature or ""),
+        f"✓ loaded `{character}`{active_label}",
     )
+
+
+def _load_selected_persona(character: str) -> Tuple:
+    """Loaded from dropdown selection, also fills the character textbox."""
+    base = _load_persona(character)
+    # Append character name as the last return value for pe_character
+    return base + (character,)
 
 
 def _save_persona(
@@ -300,6 +361,10 @@ def _save_persona(
     setting: str,
     reply_instruction: str,
     image_setting: str,
+    max_chat_len: str,
+    max_analysis_len: str,
+    max_quick_reply: str,
+    default_temperature: str,
 ) -> Tuple[List[List[Any]], gr.update, str]:
     character = (character or "").strip()
     if not character:
@@ -311,6 +376,22 @@ def _save_persona(
         "reply_instruction": reply_instruction,
         "image_setting": image_setting,
     }
+    # Add numeric fields only if they have a value.
+    for key, val in [
+        ("max_chat_len", max_chat_len),
+        ("max_analysis_len", max_analysis_len),
+        ("max_quick_reply", max_quick_reply),
+        ("default_temperature", default_temperature),
+    ]:
+        s = val.strip() if isinstance(val, str) else ""
+        if s:
+            try:
+                if key == "default_temperature":
+                    body[key] = float(s)
+                else:
+                    body[key] = int(s)
+            except ValueError:
+                pass  # Silently ignore malformed numeric values.
     try:
         _run(get_persona_manager().upsert_persona(character, body))
     except Exception as e:
@@ -328,6 +409,18 @@ def _delete_persona(character: str) -> Tuple[List[List[Any]], gr.update, str]:
     ok = _run(get_persona_manager().delete_persona(character))
     rows, dd = _refresh_personas()
     return rows, dd, ("✓ deleted" if ok else "✗ unknown character")
+
+
+def _set_active_character(character: str) -> str:
+    """Set this character as the active/default one."""
+    character = (character or "").strip()
+    if not character:
+        return "✗ character name is required"
+    try:
+        _run(get_config_manager().set_active_character(character))
+        return f"✓ active character set to `{character}`"
+    except Exception as e:
+        return f"✗ {e}"
 
 
 def _preview_persona(character: str, user_text: str) -> str:
@@ -355,6 +448,177 @@ def _preview_persona(character: str, user_text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge Base helpers
+# ---------------------------------------------------------------------------
+
+
+def _kb_character_choices() -> List[str]:
+    """Characters that have a directory under embedding/."""
+    if not os.path.isdir(_EMBEDDING_ROOT):
+        return []
+    return sorted(
+        d for d in os.listdir(_EMBEDDING_ROOT)
+        if os.path.isdir(os.path.join(_EMBEDDING_ROOT, d))
+    )
+
+
+def _kb_refresh_choices() -> Tuple[gr.update, gr.update, str, str]:
+    choices = _kb_character_choices()
+    return (
+        gr.update(choices=choices),
+        gr.update(choices=_KNOWLEDGE_SUBJECTS),
+        "",
+        "",
+    )
+
+
+def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, str, str]:
+    """List .mem files for a character/subject and show status."""
+    if not character or not subject:
+        return gr.update(choices=[], value=None), "", "Please select both character and subject."
+    subject_dir = os.path.join(_EMBEDDING_ROOT, character, subject)
+    if not os.path.isdir(subject_dir):
+        return gr.update(choices=[], value=None), "", f"Subject directory `{subject}` does not exist for `{character}`."
+    mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
+    if not mem_files:
+        return gr.update(choices=[], value=None), "", f"No `.mem` files in `{character}/{subject}`."
+    return gr.update(choices=mem_files, value=mem_files[0]), mem_files[0] if mem_files else "", f"{len(mem_files)} file(s) found."
+
+
+def _kb_read_file(character: str, subject: str, filename: str) -> str:
+    if not character or not subject or not filename:
+        return ""
+    filepath = os.path.join(_EMBEDDING_ROOT, character, subject, filename)
+    if not os.path.isfile(filepath):
+        return f"(file not found: {filename})"
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"(read error: {e})"
+
+
+def _kb_save_file(character: str, subject: str, filename: str, content: str) -> str:
+    if not character or not subject or not filename:
+        return "✗ character, subject and filename are required."
+    filepath = os.path.join(_EMBEDDING_ROOT, character, subject, filename)
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"✓ saved `{filename}`"
+    except Exception as e:
+        return f"✗ save error: {e}"
+
+
+def _kb_new_file(character: str, subject: str, filename: str) -> Tuple[str, str]:
+    """Create a new .mem file and return the empty content + status."""
+    if not character or not subject or not filename:
+        return "", "✗ filename is required."
+    if not filename.endswith(".mem"):
+        filename = filename + ".mem"
+    filepath = os.path.join(_EMBEDDING_ROOT, character, subject, filename)
+    if os.path.isfile(filepath):
+        return "", f"✗ file `{filename}` already exists."
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("")
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        return content, f"✓ created `{filename}`"
+    except Exception as e:
+        return "", f"✗ {e}"
+
+
+def _kb_rebuild_index(character: str, subject: str) -> str:
+    """Rebuild FAISS index for the given character/subject."""
+    if not character or not subject:
+        return "✗ character and subject are required."
+    from embedding.embedding import generate_vector
+    try:
+        result = generate_vector(character, subject)
+        if result == "success":
+            return f"✓ index rebuilt for `{character}/{subject}`"
+        elif result == "empty":
+            return f"⭘ no content, index removed for `{character}/{subject}`"
+        else:
+            return f"✗ rebuild failed: {result}"
+    except Exception as e:
+        return f"✗ rebuild error: {e}"
+
+
+def _kb_index_status(character: str, subject: str) -> str:
+    """Show the number of records in the index."""
+    if not character or not subject:
+        return "Select a character and subject."
+    from embedding.data_store import load_materials, index_path
+
+    p = index_path(character, subject)
+    if not os.path.exists(p):
+        return "No index file."
+    try:
+        import faiss  # type: ignore
+        idx = faiss.read_index(p)
+        n_total = int(idx.ntotal)
+    except Exception:
+        n_total = 0
+    materials = load_materials(character, subject)
+    n_materials = len(materials) if materials else 0
+    return f"Index: {n_total} vectors | Materials: {n_materials} rows | File: {os.path.basename(p)}"
+
+
+# ---------------------------------------------------------------------------
+# Chat Logs helpers
+# ---------------------------------------------------------------------------
+
+
+def _read_chat_logs(limit: int = 200) -> List[List[Any]]:
+    """Read the chat log file and return rows for display."""
+    if not os.path.isfile(_CHAT_LOG_FILE):
+        return []
+    try:
+        with open(_CHAT_LOG_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return []
+    rows: List[List[Any]] = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows.append([
+            entry.get("ts", "")[-23:-7] if entry.get("ts") else "",
+            entry.get("character", ""),
+            entry.get("user", "")[:80],
+            entry.get("assistant", "")[:120],
+            entry.get("thought", "")[:60] if entry.get("thought") else "",
+            entry.get("finish_reason", ""),
+            entry.get("tokens", {}).get("prompt", ""),
+            entry.get("tokens", {}).get("completion", ""),
+        ])
+    return rows[::-1]  # newest first
+
+
+def _refresh_chat_logs() -> Tuple[List[List[Any]], str]:
+    rows = _read_chat_logs(200)
+    return rows, f"{len(rows)} log entries (newest first)"
+
+
+def _filter_chat_logs(character: str) -> Tuple[List[List[Any]], str]:
+    """Filter log entries by character name."""
+    all_rows = _read_chat_logs(2000)
+    if not character:
+        return all_rows[:200], f"{min(len(all_rows), 200)} log entries"
+    filtered = [r for r in all_rows if r[1] == character]
+    return filtered[:200], f"{len(filtered)} entries for `{character}`"
+
+
+# ---------------------------------------------------------------------------
 # Build the UI
 # ---------------------------------------------------------------------------
 
@@ -363,9 +627,8 @@ def build_admin_ui() -> "gr.Blocks":
     with gr.Blocks(title="QwenAIServiceCore Admin") as ui:
         gr.Markdown("# QwenAIServiceCore Admin")
         gr.Markdown(
-            "Manage LLM providers, MCP servers and skill modules. "
-            "Changes take effect immediately for new requests; in-flight "
-            "requests keep their current backend."
+            "Manage LLM providers, MCP servers, personas, knowledge base and chat logs. "
+            "Changes take effect immediately for new requests."
         )
 
         # ---------- Providers ----------
@@ -381,6 +644,7 @@ def build_admin_ui() -> "gr.Blocks":
                     "vision",
                     "audio",
                     "video",
+                    "prefetch",
                     "description",
                 ],
                 interactive=False,
@@ -388,16 +652,17 @@ def build_admin_ui() -> "gr.Blocks":
             )
             with gr.Row():
                 p_name = gr.Textbox(label="name")
+                p_type = gr.Textbox(label="type", value="openai_compatible")
                 p_base_url = gr.Textbox(label="base_url (e.g. http://localhost:8000/v1)")
                 p_model = gr.Textbox(label="model")
             with gr.Row():
                 p_api_key = gr.Textbox(label="api_key", type="password")
                 p_description = gr.Textbox(label="description")
             with gr.Row():
-                p_v = gr.Checkbox(label="supports vision")
+                p_v = gr.Checkbox(label="supports vision", value=True)
                 p_a = gr.Checkbox(label="supports audio")
                 p_video = gr.Checkbox(label="supports video")
-                p_pre = gr.Checkbox(label="prefetch local files as data: URIs")
+                p_pre = gr.Checkbox(label="prefetch media URLs", value=True)
             p_extra = gr.Textbox(
                 label="extra_body (JSON merged into every request)",
                 placeholder='e.g. {"mm_processor_kwargs": {"fps": 2}}',
@@ -410,9 +675,16 @@ def build_admin_ui() -> "gr.Blocks":
                 p_refresh = gr.Button("Refresh")
             p_message = gr.Markdown()
 
+            # Click table row to fill edit form
+            prov_table.select(
+                _provider_table_select,
+                [prov_table],
+                [p_name, p_base_url, p_model, p_api_key, p_type, p_v, p_a, p_video, p_pre, p_extra, p_description],
+            )
+
             p_save.click(
                 _save_provider,
-                [p_name, p_base_url, p_api_key, p_model, p_v, p_a, p_video, p_pre, p_extra, p_description],
+                [p_name, p_base_url, p_api_key, p_model, p_type, p_v, p_a, p_video, p_pre, p_extra, p_description],
                 [prov_table, prov_status, p_message],
             )
             p_activate.click(_activate_provider, [p_name], [prov_table, prov_status, p_message])
@@ -488,6 +760,7 @@ def build_admin_ui() -> "gr.Blocks":
                 "`setting` may contain a `{embeddings}` placeholder — that's "
                 "where retrieved knowledge will be spliced in at request time."
             )
+            pe_status = gr.Markdown()
             pe_table = gr.Dataframe(
                 headers=["character", "display_name", "has_setting", "has_reply_instruction", "has_image_setting"],
                 interactive=False,
@@ -500,6 +773,7 @@ def build_admin_ui() -> "gr.Blocks":
                     allow_custom_value=False,
                 )
                 pe_load = gr.Button("Load selected")
+                pe_set_active = gr.Button("Set as active character")
                 pe_refresh = gr.Button("Refresh")
             pe_character = gr.Textbox(
                 label="character (folder name under embedding/)",
@@ -519,6 +793,11 @@ def build_admin_ui() -> "gr.Blocks":
                 lines=4,
             )
             with gr.Row():
+                pe_max_chat_len = gr.Textbox(label="max_chat_len", placeholder="e.g. 15000")
+                pe_max_analysis_len = gr.Textbox(label="max_analysis_len", placeholder="e.g. 6000")
+                pe_max_quick_reply = gr.Textbox(label="max_quick_reply", placeholder="e.g. 600")
+                pe_default_temperature = gr.Textbox(label="default_temperature", placeholder="e.g. 0.7")
+            with gr.Row():
                 pe_save = gr.Button("Save / Update")
                 pe_delete = gr.Button("Delete by name", variant="stop")
             with gr.Accordion("Preview rendered system prompt", open=False):
@@ -530,24 +809,53 @@ def build_admin_ui() -> "gr.Blocks":
                 pe_preview_out = gr.Code(label="rendered system prompt", lines=20)
             pe_message = gr.Markdown()
 
-            pe_load.click(
-                _load_persona,
+            # Auto-load on dropdown change (without clicking Load)
+            pe_pick.change(
+                _load_selected_persona,
                 [pe_pick],
                 [
                     pe_display_name,
                     pe_setting,
                     pe_reply_instruction,
                     pe_image_setting,
+                    pe_max_chat_len,
+                    pe_max_analysis_len,
+                    pe_max_quick_reply,
+                    pe_default_temperature,
                     pe_message,
+                    pe_character,
                 ],
-            ).then(
-                lambda c: c,
-                [pe_pick],
-                [pe_character],
             )
+
+            # Also keep Load button for manual use
+            pe_load.click(
+                _load_selected_persona,
+                [pe_pick],
+                [
+                    pe_display_name,
+                    pe_setting,
+                    pe_reply_instruction,
+                    pe_image_setting,
+                    pe_max_chat_len,
+                    pe_max_analysis_len,
+                    pe_max_quick_reply,
+                    pe_default_temperature,
+                    pe_message,
+                    pe_character,
+                ],
+            )
+
+            # Set active character
+            pe_set_active.click(
+                _set_active_character,
+                [pe_character],
+                [pe_message],
+            )
+
             pe_save.click(
                 _save_persona,
-                [pe_character, pe_display_name, pe_setting, pe_reply_instruction, pe_image_setting],
+                [pe_character, pe_display_name, pe_setting, pe_reply_instruction, pe_image_setting,
+                 pe_max_chat_len, pe_max_analysis_len, pe_max_quick_reply, pe_default_temperature],
                 [pe_table, pe_pick, pe_message],
             )
             pe_delete.click(
@@ -558,6 +866,115 @@ def build_admin_ui() -> "gr.Blocks":
             pe_refresh.click(_refresh_personas, None, [pe_table, pe_pick])
             pe_preview_btn.click(_preview_persona, [pe_character, pe_preview_input], [pe_preview_out])
             ui.load(_refresh_personas, None, [pe_table, pe_pick])
+
+        # ---------- Knowledge Base ----------
+        with gr.Tab("Knowledge Base"):
+            gr.Markdown(
+                "View and edit `.mem` knowledge files for each character, and rebuild FAISS indexes. "
+                "Files are stored at `embedding/<character>/<subject>/<filename>.mem`."
+            )
+            kb_status = gr.Markdown("Select a character and subject.")
+            with gr.Row():
+                kb_character = gr.Dropdown(
+                    choices=_kb_character_choices(),
+                    label="Character",
+                )
+                kb_subject = gr.Dropdown(
+                    choices=_KNOWLEDGE_SUBJECTS,
+                    value="setting",
+                    label="Subject (knowledge type)",
+                )
+                kb_refresh_list = gr.Button("Refresh file list")
+            kb_file_list = gr.Dropdown(
+                choices=[],
+                label=".mem file",
+                interactive=True,
+            )
+            with gr.Row():
+                kb_new_filename = gr.Textbox(
+                    label="New file name (e.g. new_chat.mem)",
+                    placeholder=".mem extension auto-added",
+                )
+                kb_new_btn = gr.Button("Create new file")
+            kb_content = gr.Code(
+                label="File content",
+                language="markdown",
+                lines=25,
+            )
+            with gr.Row():
+                kb_save = gr.Button("Save file")
+                kb_delete_file = gr.Button("Delete file", variant="stop")
+            with gr.Row():
+                kb_rebuild = gr.Button("Rebuild FAISS index")
+                kb_index_status_btn = gr.Button("Show index status")
+            kb_index_info = gr.Markdown()
+            kb_action_msg = gr.Markdown()
+
+            # Character/subject change -> load file list
+            kb_character.change(_kb_load_files, [kb_character, kb_subject], [kb_file_list, kb_file_list, kb_status])
+            kb_subject.change(_kb_load_files, [kb_character, kb_subject], [kb_file_list, kb_file_list, kb_status])
+            kb_refresh_list.click(_kb_load_files, [kb_character, kb_subject], [kb_file_list, kb_file_list, kb_status])
+
+            # File selection -> read content
+            kb_file_list.change(_kb_read_file, [kb_character, kb_subject, kb_file_list], [kb_content])
+
+            # Save file
+            kb_save.click(
+                _kb_save_file,
+                [kb_character, kb_subject, kb_file_list, kb_content],
+                [kb_action_msg],
+            )
+
+            # Create new file
+            kb_new_btn.click(
+                _kb_new_file,
+                [kb_character, kb_subject, kb_new_filename],
+                [kb_content, kb_action_msg],
+            ).then(
+                _kb_load_files, [kb_character, kb_subject], [kb_file_list, kb_file_list, kb_status]
+            )
+
+            # Rebuild index
+            kb_rebuild.click(
+                _kb_rebuild_index,
+                [kb_character, kb_subject],
+                [kb_action_msg],
+            )
+
+            # Index status
+            kb_index_status_btn.click(
+                _kb_index_status,
+                [kb_character, kb_subject],
+                [kb_index_info],
+            )
+
+            ui.load(_kb_refresh_choices, None, [kb_character, kb_subject, kb_status, kb_content])
+
+        # ---------- Chat Logs ----------
+        with gr.Tab("Chat Logs"):
+            gr.Markdown(
+                "Recent chat conversation logs. "
+                "Logs are stored at `logs/chat_log.jsonl` and automatically truncated "
+                "when they exceed ~10 MB. Newest entries appear first."
+            )
+            log_status = gr.Markdown()
+            log_filter = gr.Dropdown(
+                choices=[""] + _persona_choices(),
+                label="Filter by character (empty = show all)",
+                value="",
+            )
+            with gr.Row():
+                log_refresh = gr.Button("Refresh")
+            log_table = gr.Dataframe(
+                headers=["time", "character", "user", "assistant", "thought", "finish", "prompt_tk", "completion_tk"],
+                interactive=False,
+                wrap=True,
+                max_rows=200,
+            )
+
+            log_filter.change(_filter_chat_logs, [log_filter], [log_table, log_status])
+            log_refresh.click(_refresh_chat_logs, None, [log_table, log_status])
+            ui.load(_refresh_chat_logs, None, [log_table, log_status])
 
     return ui
 

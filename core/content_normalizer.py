@@ -24,16 +24,18 @@ media types are passed through as references (``file:`` / ``http(s):`` /
 ``data:`` URIs), letting vLLM's media pipeline do the heavy lifting on the
 server side.
 
-This module is intentionally **pure** -- it never talks to the network. If a
-provider has ``prefetch_media=true``, the caller is responsible for converting
-``http(s)`` URLs into ``data:`` URIs before calling this normalizer (so the
-remote provider receives self-contained payloads).
+When ``prefetch_files=True`` or the provider config has ``prefetch_media=true``,
+**HTTP(S) URLs for all media types (image/audio/video) are downloaded locally
+and inlined as ``data:`` URIs** before being sent to the upstream. This solves
+the problem of vLLM (or other providers) being unable to fetch protected URLs
+(e.g. CDN-signed URLs with temporary keys).
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import logging
 import mimetypes
 import os
 import re
@@ -46,6 +48,7 @@ except Exception:  # pragma: no cover -- pillow listed in requirements
     Image = None  # type: ignore
     ImageSequence = None  # type: ignore
 
+LOG = logging.getLogger(__name__)
 
 # Placeholder pattern: [type,arg=value,arg=value,...]
 # Where type is one of image/audio/video/gif. The value of each arg can be a
@@ -59,6 +62,53 @@ _PLACEHOLDER_RE = re.compile(
 # Default frame budget when expanding GIFs. Big GIFs would otherwise blow up
 # the prompt; this is the same kind of cap vLLM applies for videos.
 DEFAULT_GIF_MAX_FRAMES = 16
+
+# User-Agent for URL prefetch requests (some CDNs require it).
+_PREFETCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+# ---------------------------------------------------------------------------
+# URL prefetch helper
+# ---------------------------------------------------------------------------
+
+
+def _prefetch_url(url: str, timeout: float = 15.0) -> Optional[Tuple[bytes, str]]:
+    """Download a URL and return ``(raw_bytes, mime_type)``.
+
+    Returns ``None`` on any failure (network error, timeout, empty body).
+    The caller silently falls back to the original URL when prefetch fails.
+    """
+    try:
+        import requests  # lazy import, already in requirements.txt
+    except ImportError:
+        LOG.warning("requests not available, cannot prefetch %s", url)
+        return None
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": _PREFETCH_USER_AGENT},
+            timeout=timeout,
+            stream=True,
+        )
+        resp.raise_for_status()
+        data = resp.content
+        if not data:
+            return None
+        mime = resp.headers.get("Content-Type", "") or _guess_mime_from_url(url)
+        return data, mime
+    except Exception as e:
+        LOG.debug("Failed to prefetch %s: %r", url, e)
+        return None
+
+
+def _guess_mime_from_url(url: str) -> str:
+    """Guess MIME type from the URL's extension."""
+    path = url.split("?")[0].split("#")[0]
+    mime, _ = mimetypes.guess_type(path)
+    return mime or "application/octet-stream"
 
 
 # ---------------------------------------------------------------------------
@@ -424,12 +474,24 @@ def _ref_to_openai_url(
 ) -> str:
     """Turn a ``ref`` into the URL string used by OpenAI-style content parts.
 
-    When ``prefetch`` is true, ``file`` refs are inlined as base64 data URLs.
+    When ``prefetch`` is true, ``file`` refs are inlined as base64 data URLs,
+    and **HTTP(S) URLs are downloaded and inlined** so that the upstream
+    provider does not need to fetch them itself (solving CDN auth issues).
     ``url`` refs are NEVER fetched here -- the caller may pre-process them.
     """
     source = ref.get("source")
     if source == "url":
-        return str(ref.get("url", ""))
+        url = str(ref.get("url", ""))
+        if prefetch and url.startswith(("http://", "https://")):
+            result = _prefetch_url(url)
+            if result is not None:
+                data, mime = result
+                b64 = base64.b64encode(data).decode("ascii")
+                return f"data:{mime};base64,{b64}"
+            # Prefetch failed -- fall back to the original URL so the request
+            # doesn't completely fail; vLLM may still be able to fetch it.
+            LOG.debug("Prefetch failed for %s, falling back to raw URL", url)
+        return url
     if source == "file":
         path = ref.get("path", "")
         if prefetch and path and os.path.exists(path):

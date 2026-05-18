@@ -193,6 +193,7 @@ class ConfigManager:
         self._lock = asyncio.Lock()
         self._providers: Dict[str, ProviderConfig] = {}
         self._active_provider: str = ""
+        self._active_character: str = ""
         self._mcp_servers: Dict[str, MCPServerConfig] = {}
         self._mcp_tool_call_mode: str = "passthrough"
         self._mcp_tool_call_timeout: float = 30.0
@@ -209,6 +210,7 @@ class ConfigManager:
         if not os.path.exists(PROVIDERS_FILE):
             self._providers = {}
             self._active_provider = ""
+            self._active_character = ""
             return
         with open(PROVIDERS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -224,10 +226,12 @@ class ConfigManager:
             self._active_provider = sorted(self._providers.keys())[0]
         else:
             self._active_provider = ""
+        self._active_character = str(data.get("active_character", ""))
 
     def _dump_providers_sync(self) -> None:
         data = {
             "active": self._active_provider,
+            "active_character": self._active_character,
             "providers": {name: p.to_dict() for name, p in self._providers.items()},
         }
         _atomic_write_json(PROVIDERS_FILE, data)
@@ -341,6 +345,28 @@ class ConfigManager:
                 )
             self._mcp_tool_call_mode = mode
             self._dump_mcp_sync()
+
+    # ----- active character --------------------------------------------------
+
+    def get_active_character(self) -> str:
+        """Return the name of the currently active character (folder name)."""
+        return self._active_character
+
+    async def set_active_character(self, character: str) -> None:
+        """Set the active character by folder name (e.g. ``tendou_arisu``).
+
+        The value is stored in ``providers.json`` under an ``active_character``
+        key so it survives restarts. Passing an empty string clears the setting.
+        """
+        async with self._lock:
+            self._active_character = character
+            # Persist alongside provider data for simplicity.
+            data = {
+                "active": self._active_provider,
+                "active_character": self._active_character,
+                "providers": {name: p.to_dict() for name, p in self._providers.items()},
+            }
+            _atomic_write_json(PROVIDERS_FILE, data)
 
 
 _singleton: Optional[ConfigManager] = None

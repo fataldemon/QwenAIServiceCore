@@ -29,4 +29,5 @@ images_cache/
 
 # Logs
 *.log
-logs/
+logs/*
+!logs/.gitkeep

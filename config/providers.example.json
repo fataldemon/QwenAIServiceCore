@@ -16,8 +16,8 @@
       },
       "request_timeout": 600,
       "stream_chunk_timeout": 60,
-      "prefetch_media": false,
-      "description": "Local vLLM server started by `vllm serve`."
+      "prefetch_media": true,
+      "description": "Local vLLM server started by `vllm serve`. Media URLs are downloaded locally and inlined as data URIs."
     },
     "dashscope": {
       "type": "openai_compatible",
@@ -30,7 +30,7 @@
       "extra_body": {},
       "request_timeout": 600,
       "stream_chunk_timeout": 60,
-      "prefetch_media": false,
+      "prefetch_media": true,
       "description": "Aliyun DashScope OpenAI-compatible endpoint."
     },
     "deepseek": {
