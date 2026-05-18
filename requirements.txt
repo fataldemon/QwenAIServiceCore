@@ -26,4 +26,4 @@ mcp~=1.2.0
 pyyaml~=6.0.2
 
 # --- Admin web UI (mounted to /admin on the same FastAPI app) ---
-gradio~=4.44.1
+gradio>=5.0

@@ -969,7 +969,6 @@ def build_admin_ui() -> "gr.Blocks":
                 headers=["time", "character", "user", "assistant", "thought", "finish", "prompt_tk", "completion_tk"],
                 interactive=False,
                 wrap=True,
-                max_rows=200,
             )
 
             log_filter.change(_filter_chat_logs, [log_filter], [log_table, log_status])
