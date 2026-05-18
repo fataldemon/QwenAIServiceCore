@@ -543,6 +543,7 @@ def to_openai_content(
     parts: Iterable[ContentPart],
     *,
     prefetch_files: bool = False,
+    fallback_text: str = "[media unavailable]",
 ) -> Union[str, List[Dict[str, Any]]]:
     """Serialize an ordered :class:`ContentPart` list to an OpenAI content payload.
 
