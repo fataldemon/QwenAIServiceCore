@@ -55,6 +55,7 @@ from core.config_manager import get_config_manager
 from core.mcp_manager import get_mcp_manager
 from core.persona_manager import get_persona_manager
 from core.skill_manager import get_skill_manager
+from embedding.embedding import _get_model
 from embedding.migrate import migrate_all
 from llm.chat import (
     abort_request,
@@ -124,6 +125,12 @@ async def lifespan(app: FastAPI):
             LOG.info("Embedding migration summary: %s", summary)
     except Exception as e:  # pragma: no cover -- best-effort
         LOG.warning("Embedding migration failed: %r", e)
+    # Eager-load embedding model at startup (lazy init otherwise)
+    try:
+        _get_model()
+        LOG.info("Embedding model preloaded")
+    except Exception as e:  # pragma: no cover -- best-effort
+        LOG.warning("Embedding model preload failed: %r", e)
     yield
     # Graceful shutdown: close MCP sessions + backend HTTP clients.
     try:
