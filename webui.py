@@ -338,7 +338,7 @@ def _save_mcp(
     except Exception as e:
         rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, f"✗ {e}"
-    rows, info, radio = _refresh_mcp()
+    rows, info, radio, rounds = _refresh_mcp()
     return rows, info, radio, f"✓ saved {name.strip()}"
 
 
@@ -350,7 +350,7 @@ def _delete_mcp(name: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     ok = _run(get_config_manager().delete_mcp_server(name))
     if ok:
         _run(get_mcp_manager().invalidate(name))
-    rows, info, radio = _refresh_mcp()
+    rows, info, radio, rounds = _refresh_mcp()
     return rows, info, radio, ("✓ deleted" if ok else "✗ unknown server")
 
 
@@ -360,7 +360,7 @@ def _set_mcp_mode(mode: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     except Exception as e:
         rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, f"✗ {e}"
-    rows, info, radio = _refresh_mcp()
+    rows, info, radio, rounds = _refresh_mcp()
     return rows, info, radio, f"✓ mode = {mode}"
 
 
