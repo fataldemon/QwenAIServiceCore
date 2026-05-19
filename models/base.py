@@ -69,7 +69,7 @@ class ChatCompletionResponseChoice(BaseModel):
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
-    finish_reason: Optional[Literal["stop", "length"]]
+    finish_reason: Optional[Literal["stop", "length", "function_call", "overthink", "abort", "error"]]
 
 
 class ChatCompletionResponse(BaseModel):

@@ -334,6 +334,12 @@ async def chat(
     tools = await _gather_tools(request)
 
     request_id = request.request_id or str(uuid.uuid4())
+
+    # Legacy abort: cancel any in-flight request with the same abort_id
+    if request.abort_id:
+        LOG.info("Legacy abort via chat request for abort_id=%r", request.abort_id)
+        await abort_request(request.abort_id)
+
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
 
@@ -427,6 +433,11 @@ async def chat_on_setting(
     )
     tools = await _gather_tools(request)
 
+    # Legacy abort: cancel any in-flight request with the same abort_id
+    if request.abort_id:
+        LOG.info("Legacy abort via chat request for abort_id=%r", request.abort_id)
+        await abort_request(request.abort_id)
+
     request_id = request.request_id or str(uuid.uuid4())
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
@@ -519,10 +530,14 @@ async def chat_on_setting_stream(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
     tools = await _gather_tools(request)
+
     request_id = request.request_id or str(uuid.uuid4())
+    # Legacy abort: cancel any in-flight request with the same abort_id
+    if request.abort_id:
+        LOG.info("Legacy abort via chat request for abort_id=%r", request.abort_id)
+        await abort_request(request.abort_id)
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
-
     # Emit the opening role chunk.
     yield ChatCompletionResponse(
         model=request.model,
