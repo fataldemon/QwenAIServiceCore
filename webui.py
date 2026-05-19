@@ -227,7 +227,7 @@ def _delete_provider(name: str) -> Tuple[List[List[Any]], str, gr.update, str]:
 # ---------------------------------------------------------------------------
 
 
-def _refresh_mcp() -> Tuple[List[List[Any]], str, gr.update]:
+def _refresh_mcp() -> Tuple[List[List[Any]], str, gr.update, gr.update]:
     cm = get_config_manager()
     rows = []
     health = _run(get_mcp_manager().health())
@@ -248,6 +248,7 @@ def _refresh_mcp() -> Tuple[List[List[Any]], str, gr.update]:
         rows,
         f"Mode: `{cm.get_mcp_tool_call_mode()}` | Timeout: {cm.get_mcp_tool_call_timeout()}s",
         gr.update(value=cm.get_mcp_tool_call_mode()),
+        gr.update(value=cm.get_mcp_max_tool_rounds()),
     )
 
 
@@ -312,14 +313,14 @@ def _save_mcp(
     description: str,
 ) -> Tuple[List[List[Any]], str, gr.update, str]:
     if not name.strip():
-        rows, info, radio = _refresh_mcp()
+        rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, "✗ name is required"
     try:
         headers = json.loads(headers_json) if headers_json.strip() else {}
         if not isinstance(headers, dict):
             raise ValueError("headers must be a JSON object")
     except Exception as e:
-        rows, info, radio = _refresh_mcp()
+        rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, f"✗ bad headers JSON: {e}"
     args = [a for a in (args_text or "").splitlines() if a.strip()]
     body = {
@@ -335,7 +336,7 @@ def _save_mcp(
         _run(get_config_manager().upsert_mcp_server(name.strip(), body))
         _run(get_mcp_manager().invalidate(name.strip()))
     except Exception as e:
-        rows, info, radio = _refresh_mcp()
+        rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, f"✗ {e}"
     rows, info, radio = _refresh_mcp()
     return rows, info, radio, f"✓ saved {name.strip()}"
@@ -344,7 +345,7 @@ def _save_mcp(
 def _delete_mcp(name: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     name = name.strip()
     if not name:
-        rows, info, radio = _refresh_mcp()
+        rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, "✗ name is required"
     ok = _run(get_config_manager().delete_mcp_server(name))
     if ok:
@@ -357,10 +358,19 @@ def _set_mcp_mode(mode: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     try:
         _run(get_config_manager().set_mcp_tool_call_mode(mode))
     except Exception as e:
-        rows, info, radio = _refresh_mcp()
+        rows, info, radio, rounds = _refresh_mcp()
         return rows, info, radio, f"✗ {e}"
     rows, info, radio = _refresh_mcp()
     return rows, info, radio, f"✓ mode = {mode}"
+
+
+def _set_mcp_max_tool_rounds(rounds: float) -> Tuple[str, str]:
+    try:
+        _run(get_config_manager().set_mcp_max_tool_rounds(int(rounds)))
+    except Exception as e:
+        return f"✗ {e}", gr.update()
+    val = get_config_manager().get_mcp_max_tool_rounds()
+    return f"✓ max rounds = {val}", gr.update(value=val)
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +991,11 @@ def build_admin_ui() -> "gr.Blocks":
                     label="tool_call_mode (select to apply)",
                     interactive=True,
                 )
+                mcp_rounds = gr.Number(
+                    value=5, minimum=1, maximum=20, step=1,
+                    label="max tool rounds",
+                    interactive=True,
+                )
             with gr.Row():
                 m_name = gr.Textbox(label="name")
                 m_enabled = gr.Checkbox(label="enabled")
@@ -1011,6 +1026,11 @@ def build_admin_ui() -> "gr.Blocks":
                 [mcp_table, mcp_status, mcp_radio, m_message],
             )
 
+            mcp_rounds.change(
+                _set_mcp_max_tool_rounds, [mcp_rounds],
+                [m_message, mcp_rounds],
+            )
+
             m_save.click(
                 _save_mcp,
                 [m_name, m_enabled, m_transport, m_command, m_args, m_url,
@@ -1018,8 +1038,8 @@ def build_admin_ui() -> "gr.Blocks":
                 [mcp_table, mcp_status, mcp_radio, m_message],
             )
             m_delete.click(_delete_mcp, [m_name], [mcp_table, mcp_status, mcp_radio, m_message])
-            m_refresh.click(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio])
-            ui.load(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio])
+            m_refresh.click(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio, mcp_rounds])
+            ui.load(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio, mcp_rounds])
 
         # ---------- Skills ----------
         with gr.Tab("Skills"):

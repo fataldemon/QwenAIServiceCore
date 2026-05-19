@@ -197,6 +197,7 @@ class ConfigManager:
         self._mcp_servers: Dict[str, MCPServerConfig] = {}
         self._mcp_tool_call_mode: str = "passthrough"
         self._mcp_tool_call_timeout: float = 30.0
+        self._mcp_max_tool_rounds: int = 5
         # Synchronous load so that the manager is ready immediately after
         # construction. We avoid touching the asyncio lock here because
         # construction is expected during single-threaded startup.
@@ -287,6 +288,7 @@ class ConfigManager:
             self._mcp_servers = {}
             self._mcp_tool_call_mode = "passthrough"
             self._mcp_tool_call_timeout = 30.0
+            self._mcp_max_tool_rounds = 5
             return
         with open(MCP_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -299,12 +301,17 @@ class ConfigManager:
             self._mcp_tool_call_timeout = float(data.get("tool_call_timeout", 30))
         except (TypeError, ValueError):
             self._mcp_tool_call_timeout = 30.0
+        try:
+            self._mcp_max_tool_rounds = int(data.get("max_tool_rounds", 5))
+        except (TypeError, ValueError):
+            self._mcp_max_tool_rounds = 5
 
     def _dump_mcp_sync(self) -> None:
         data = {
             "servers": {name: s.to_dict() for name, s in self._mcp_servers.items()},
             "tool_call_mode": self._mcp_tool_call_mode,
             "tool_call_timeout": self._mcp_tool_call_timeout,
+            "max_tool_rounds": self._mcp_max_tool_rounds,
         }
         _atomic_write_json(MCP_FILE, data)
 
@@ -320,6 +327,14 @@ class ConfigManager:
 
     def get_mcp_tool_call_timeout(self) -> float:
         return self._mcp_tool_call_timeout
+
+    def get_mcp_max_tool_rounds(self) -> int:
+        return self._mcp_max_tool_rounds
+
+    async def set_mcp_max_tool_rounds(self, rounds: int) -> None:
+        async with self._lock:
+            self._mcp_max_tool_rounds = max(1, min(20, int(rounds)))
+            self._dump_mcp_sync()
 
     async def upsert_mcp_server(
         self, name: str, config: Dict[str, Any]

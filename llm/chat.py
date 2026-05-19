@@ -544,12 +544,14 @@ async def chat_on_setting(
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
 
-    MAX_TOOL_ROUNDS = 5
+    max_rounds = get_config_manager().get_mcp_max_tool_rounds()
     result = None
     thought = ""
     answer = ""
+    round_num = 0
     async def _mcp_execute():
-        nonlocal result, thought, answer
+        nonlocal result, thought, answer, round_num
+        round_num += 1
         try:
             result = await backend.generate(
                 messages=messages,
@@ -565,10 +567,34 @@ async def chat_on_setting(
         if result.reasoning and not thought:
             thought = result.reasoning
         answer = _postprocess_answer(answer, request.character or "")
+        _append_vllm_request_log({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "character": request.character or "",
+            "provider": provider_cfg.name,
+            "model": provider_cfg.model,
+            "base_url": provider_cfg.base_url,
+            "type": f"mcp_round/{round_num}",
+            "request": {
+                "messages": messages,
+                "sampling": sampling,
+                "tools": tools,
+                "extra_body": extra_body,
+            },
+            "response": {
+                "finish_reason": result.finish_reason,
+                "function_calls": result.function_calls or None,
+                "tokens": {
+                    "prompt": result.prompt_tokens,
+                    "completion": result.completion_tokens,
+                },
+                "answer": answer,
+                "thought": thought,
+            },
+        })
 
     async def _mcp_loop() -> Optional[ChatCompletionResponseChoice]:
         nonlocal result, thought, answer
-        for _round in range(MAX_TOOL_ROUNDS):
+        for _round in range(max_rounds):
             await _mcp_execute()
             if not result.function_calls:
                 return ChatCompletionResponseChoice(
@@ -620,30 +646,6 @@ async def chat_on_setting(
     choice = await _mcp_loop()
     if request.abort_id:
         _active_requests.pop(request.abort_id, None)
-    _append_vllm_request_log({
-        "ts": request_ts,
-        "character": request.character or "",
-        "provider": provider_cfg.name,
-        "model": provider_cfg.model,
-        "base_url": provider_cfg.base_url,
-        "type": "non_streaming",
-        "request": {
-            "messages": messages,
-            "sampling": sampling,
-            "tools": tools,
-            "extra_body": extra_body,
-        },
-        "response": {
-            "finish_reason": result.finish_reason,
-            "function_calls": result.function_calls or None,
-            "tokens": {
-                "prompt": result.prompt_tokens,
-                "completion": result.completion_tokens,
-            },
-            "answer": answer,
-            "thought": thought,
-        },
-    })
 
     # Log the conversation turn to the chat log file.
     try:
