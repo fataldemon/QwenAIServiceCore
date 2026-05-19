@@ -227,7 +227,7 @@ def _delete_provider(name: str) -> Tuple[List[List[Any]], str, gr.update, str]:
 # ---------------------------------------------------------------------------
 
 
-def _refresh_mcp() -> Tuple[List[List[Any]], str]:
+def _refresh_mcp() -> Tuple[List[List[Any]], str, gr.update]:
     cm = get_config_manager()
     rows = []
     health = _run(get_mcp_manager().health())
@@ -244,7 +244,61 @@ def _refresh_mcp() -> Tuple[List[List[Any]], str]:
                 s.description,
             ]
         )
-    return rows, f"Mode: `{cm.get_mcp_tool_call_mode()}` | Timeout: {cm.get_mcp_tool_call_timeout()}s"
+    return (
+        rows,
+        f"Mode: `{cm.get_mcp_tool_call_mode()}` | Timeout: {cm.get_mcp_tool_call_timeout()}s",
+        gr.update(value=cm.get_mcp_tool_call_mode()),
+    )
+
+
+def _mcp_table_select(evt: gr.SelectData, table) -> Tuple:
+    """Fill the MCP edit form when a table row is clicked."""
+    if evt.index is None:
+        return "", False, "stdio", "", "", "", "{}", "", ""
+    row_idx = evt.index[0]
+    try:
+        import pandas as pd
+        if isinstance(table, pd.DataFrame):
+            if row_idx >= len(table):
+                return "", False, "stdio", "", "", "", "{}", "", ""
+            row = table.iloc[row_idx].tolist()
+        else:
+            if row_idx >= len(table):
+                return "", False, "stdio", "", "", "", "{}", "", ""
+            row = table[row_idx]
+    except Exception:
+        return "", False, "stdio", "", "", "", "{}", "", ""
+    name = row[0] if len(row) > 0 else ""
+    enabled = bool(row[1]) if len(row) > 1 else False
+    transport = row[2] if len(row) > 2 else "stdio"
+    cmd_or_url = row[3] if len(row) > 3 else ""
+    desc = row[6] if len(row) > 6 else ""
+
+    # Fetch full config for remaining fields
+    cfg = get_config_manager().get_mcp_server(name)
+    command_val = ""
+    url_val = ""
+    args_val = ""
+    headers_val = ""
+    if cfg:
+        command_val = cfg.command or ""
+        url_val = cfg.url or ""
+        args_val = "\n".join(cfg.args) if cfg.args else ""
+        headers_val = json.dumps(cfg.headers, ensure_ascii=False) if cfg.headers else "{}"
+
+    if transport in ("sse", "streamable_http"):
+        command_or_url_display = url_val or cmd_or_url
+    else:
+        command_or_url_display = command_val or cmd_or_url
+
+    return (
+        name, enabled, transport,
+        command_val if transport == "stdio" else "",
+        args_val if transport == "stdio" else "",
+        url_val if transport in ("sse", "streamable_http") else "",
+        headers_val,
+        desc,
+    )
 
 
 def _save_mcp(
@@ -256,17 +310,17 @@ def _save_mcp(
     url: str,
     headers_json: str,
     description: str,
-) -> Tuple[List[List[Any]], str, str]:
+) -> Tuple[List[List[Any]], str, gr.update, str]:
     if not name.strip():
-        rows, info = _refresh_mcp()
-        return rows, info, "✗ name is required"
+        rows, info, radio = _refresh_mcp()
+        return rows, info, radio, "✗ name is required"
     try:
         headers = json.loads(headers_json) if headers_json.strip() else {}
         if not isinstance(headers, dict):
             raise ValueError("headers must be a JSON object")
     except Exception as e:
-        rows, info = _refresh_mcp()
-        return rows, info, f"✗ bad headers JSON: {e}"
+        rows, info, radio = _refresh_mcp()
+        return rows, info, radio, f"✗ bad headers JSON: {e}"
     args = [a for a in (args_text or "").splitlines() if a.strip()]
     body = {
         "enabled": bool(enabled),
@@ -281,32 +335,32 @@ def _save_mcp(
         _run(get_config_manager().upsert_mcp_server(name.strip(), body))
         _run(get_mcp_manager().invalidate(name.strip()))
     except Exception as e:
-        rows, info = _refresh_mcp()
-        return rows, info, f"✗ {e}"
-    rows, info = _refresh_mcp()
-    return rows, info, f"✓ saved {name.strip()}"
+        rows, info, radio = _refresh_mcp()
+        return rows, info, radio, f"✗ {e}"
+    rows, info, radio = _refresh_mcp()
+    return rows, info, radio, f"✓ saved {name.strip()}"
 
 
-def _delete_mcp(name: str) -> Tuple[List[List[Any]], str, str]:
+def _delete_mcp(name: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     name = name.strip()
     if not name:
-        rows, info = _refresh_mcp()
-        return rows, info, "✗ name is required"
+        rows, info, radio = _refresh_mcp()
+        return rows, info, radio, "✗ name is required"
     ok = _run(get_config_manager().delete_mcp_server(name))
     if ok:
         _run(get_mcp_manager().invalidate(name))
-    rows, info = _refresh_mcp()
-    return rows, info, ("✓ deleted" if ok else "✗ unknown server")
+    rows, info, radio = _refresh_mcp()
+    return rows, info, radio, ("✓ deleted" if ok else "✗ unknown server")
 
 
-def _set_mcp_mode(mode: str) -> Tuple[List[List[Any]], str, str]:
+def _set_mcp_mode(mode: str) -> Tuple[List[List[Any]], str, gr.update, str]:
     try:
         _run(get_config_manager().set_mcp_tool_call_mode(mode))
     except Exception as e:
-        rows, info = _refresh_mcp()
-        return rows, info, f"✗ {e}"
-    rows, info = _refresh_mcp()
-    return rows, info, f"✓ mode = {mode}"
+        rows, info, radio = _refresh_mcp()
+        return rows, info, radio, f"✗ {e}"
+    rows, info, radio = _refresh_mcp()
+    return rows, info, radio, f"✓ mode = {mode}"
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +387,66 @@ def _read_skill(name: str) -> str:
         return ""
     body = get_skill_manager().read_skill(name.strip())
     return body or "(skill not found)"
+
+
+def _read_skill_raw(name: str) -> str:
+    if not name.strip():
+        return ""
+    raw = get_skill_manager().read_skill_raw(name.strip())
+    return raw or "(skill not found)"
+
+
+def _save_skill(name: str, body: str) -> Tuple[List[List[Any]], str, str]:
+    name = name.strip()
+    if not name:
+        rows, info = _refresh_skills()
+        return rows, info, "✗ skill name is required"
+    ok = get_skill_manager().write_skill(name, body)
+    rows, info = _refresh_skills()
+    return rows, info, f"✓ saved `{name}`" if ok else f"✗ failed to save `{name}`"
+
+
+def _delete_skill(name: str) -> Tuple[List[List[Any]], str, str]:
+    name = name.strip()
+    if not name:
+        rows, info = _refresh_skills()
+        return rows, info, "✗ skill name is required"
+    ok = get_skill_manager().delete_skill(name)
+    rows, info = _refresh_skills()
+    return rows, info, f"✓ deleted `{name}`" if ok else f"✗ unknown skill `{name}`"
+
+
+def _create_skill(name: str) -> Tuple[List[List[Any]], str, str, str]:
+    name = name.strip()
+    if not name:
+        rows, info = _refresh_skills()
+        return rows, info, "", "✗ skill name is required"
+    template = f"---\nname: {name}\ndescription: \"\"\nversion: \"0.1.0\"\nauto_inject: false\ntriggers:\n  keywords: []\n  regex: []\n---\n"
+    ok = get_skill_manager().write_skill(name, template)
+    rows, info = _refresh_skills()
+    return rows, info, template if ok else "", f"✓ created `{name}`" if ok else f"✗ failed to create `{name}`"
+
+
+def _skill_table_select(evt: gr.SelectData, table) -> Tuple:
+    """Fill skill name + raw body when a table row is clicked."""
+    if evt.index is None:
+        return "", ""
+    row_idx = evt.index[0]
+    try:
+        import pandas as pd
+        if isinstance(table, pd.DataFrame):
+            if row_idx >= len(table):
+                return "", ""
+            row = table.iloc[row_idx].tolist()
+        else:
+            if row_idx >= len(table):
+                return "", ""
+            row = table[row_idx]
+    except Exception:
+        return "", ""
+    name = row[0] if len(row) > 0 else ""
+    raw = get_skill_manager().read_skill_raw(name) or ""
+    return name, raw
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +975,13 @@ def build_admin_ui() -> "gr.Blocks":
                 wrap=True,
             )
             with gr.Row():
+                mcp_radio = gr.Radio(
+                    choices=["passthrough", "server_side"],
+                    value="passthrough",
+                    label="tool_call_mode (select to apply)",
+                    interactive=True,
+                )
+            with gr.Row():
                 m_name = gr.Textbox(label="name")
                 m_enabled = gr.Checkbox(label="enabled")
                 m_transport = gr.Dropdown(
@@ -877,27 +998,35 @@ def build_admin_ui() -> "gr.Blocks":
                 m_save = gr.Button("Save / Update", variant="primary")
                 m_delete = gr.Button("Delete by name", variant="stop")
                 m_refresh = gr.Button("Refresh")
-            mode_dropdown = gr.Dropdown(
-                choices=["passthrough", "server_side"],
-                value="passthrough",
-                label="tool_call_mode",
-            )
-            m_set_mode = gr.Button("Apply mode")
             m_message = gr.Markdown()
+
+            mcp_table.select(
+                _mcp_table_select,
+                [mcp_table],
+                [m_name, m_enabled, m_transport, m_command, m_args, m_url, m_headers, m_description],
+            )
+
+            mcp_radio.change(
+                _set_mcp_mode, [mcp_radio],
+                [mcp_table, mcp_status, mcp_radio, m_message],
+            )
 
             m_save.click(
                 _save_mcp,
                 [m_name, m_enabled, m_transport, m_command, m_args, m_url,
                  m_headers, m_description],
-                [mcp_table, mcp_status, m_message],
+                [mcp_table, mcp_status, mcp_radio, m_message],
             )
-            m_delete.click(_delete_mcp, [m_name], [mcp_table, mcp_status, m_message])
-            m_refresh.click(_refresh_mcp, None, [mcp_table, mcp_status])
-            m_set_mode.click(_set_mcp_mode, [mode_dropdown], [mcp_table, mcp_status, m_message])
-            ui.load(_refresh_mcp, None, [mcp_table, mcp_status])
+            m_delete.click(_delete_mcp, [m_name], [mcp_table, mcp_status, mcp_radio, m_message])
+            m_refresh.click(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio])
+            ui.load(_refresh_mcp, None, [mcp_table, mcp_status, mcp_radio])
 
         # ---------- Skills ----------
         with gr.Tab("Skills"):
+            gr.Markdown(
+                "Browse and edit skill modules. Each skill is a directory under `skills/` "
+                "containing a `SKILL.md` file with YAML front matter and markdown body."
+            )
             sk_status = gr.Markdown()
             sk_table = gr.Dataframe(
                 headers=["name", "version", "auto_inject", "description"],
@@ -905,12 +1034,37 @@ def build_admin_ui() -> "gr.Blocks":
                 wrap=True,
             )
             with gr.Row():
-                sk_name = gr.Textbox(label="name to preview")
-                sk_view = gr.Button("View body")
-                sk_reload = gr.Button("Reload from disk", variant="primary")
-            sk_body = gr.Code(label="SKILL.md body", language="markdown", lines=15)
+                sk_name = gr.Textbox(
+                    label="skill name (folder name, e.g. 'example')",
+                    placeholder="e.g. my_skill",
+                )
+                sk_new_btn = gr.Button("Create new skill")
+            sk_body = gr.Code(label="SKILL.md content", language="markdown", lines=18)
+            with gr.Row():
+                sk_save = gr.Button("Save / Update", variant="primary")
+                sk_delete = gr.Button("Delete by name", variant="stop")
+                sk_reload = gr.Button("Reload from disk")
+            sk_message = gr.Markdown()
 
-            sk_view.click(_read_skill, [sk_name], [sk_body])
+            sk_table.select(
+                _skill_table_select,
+                [sk_table],
+                [sk_name, sk_body],
+            )
+
+            sk_save.click(
+                _save_skill,
+                [sk_name, sk_body],
+                [sk_table, sk_status, sk_message],
+            )
+            sk_delete.click(
+                _delete_skill, [sk_name],
+                [sk_table, sk_status, sk_message],
+            )
+            sk_new_btn.click(
+                _create_skill, [sk_name],
+                [sk_table, sk_status, sk_body, sk_message],
+            )
             sk_reload.click(_reload_skills, None, [sk_table, sk_status])
             ui.load(_refresh_skills, None, [sk_table, sk_status])
 

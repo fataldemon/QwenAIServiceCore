@@ -162,6 +162,46 @@ class SkillManager:
         _fm, body = _split_frontmatter(raw)
         return body
 
+    def read_skill_raw(self, name: str) -> Optional[str]:
+        """Read the full SKILL.md content including front matter."""
+        sk = self._skills.get(name)
+        if sk is None:
+            return None
+        path = os.path.join(sk.skill_dir, "SKILL.md")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def write_skill(self, name: str, body: str) -> bool:
+        """Write (create or update) a SKILL.md file. Returns True on success."""
+        try:
+            sdir = os.path.join(SKILLS_ROOT, name)
+            os.makedirs(sdir, exist_ok=True)
+            path = os.path.join(sdir, "SKILL.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(body)
+            self.reload()
+            return True
+        except OSError as e:
+            LOG.warning("write_skill(%s): %r", name, e)
+            return False
+
+    def delete_skill(self, name: str) -> bool:
+        """Delete a skill directory and its SKILL.md. Returns True on success."""
+        sdir = os.path.join(SKILLS_ROOT, name)
+        if not os.path.isdir(sdir):
+            return False
+        try:
+            import shutil
+            shutil.rmtree(sdir)
+            self.reload()
+            return True
+        except OSError as e:
+            LOG.warning("delete_skill(%s): %r", name, e)
+            return False
+
     def auto_inject_for(self, user_text: str) -> List[str]:
         """Return bodies of every skill that auto-injects on ``user_text``."""
         out: List[str] = []

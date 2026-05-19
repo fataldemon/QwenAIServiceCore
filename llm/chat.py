@@ -36,7 +36,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from core.config_manager import get_config_manager
 from core.content_normalizer import (
@@ -321,11 +321,56 @@ def _postprocess_answer(answer: str, character: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _gather_tools(req: ChatCompletionRequest) -> Optional[List[Dict[str, Any]]]:
-    """Combine request ``functions`` + MCP server tools (if server-side mode)."""
+async def _execute_mcp_tool(
+    mm,  # MCPManager
+    tool_name: str,
+    arguments: str,
+    messages: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Execute an MCP tool and append tool_call + tool_result to messages.
+
+    Returns a log entry dict if successful, None on failure.
+    """
+    try:
+        args = json.loads(arguments) if isinstance(arguments, str) and arguments else {}
+    except json.JSONDecodeError:
+        args = {}
+    try:
+        tool_result = await mm.call_tool(tool_name, args)
+    except Exception as e:
+        LOG.warning("MCP tool %s failed: %r", tool_name, e)
+        tool_result = f"Error: {e!r}"
+    result_str = json.dumps(tool_result, ensure_ascii=False) if not isinstance(tool_result, str) else tool_result
+    messages.append({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "type": "function",
+            "function": {"name": tool_name, "arguments": arguments},
+        }],
+    })
+    messages.append({
+        "role": "tool",
+        "content": f"<tool_response>\n{result_str}\n</tool_response>",
+    })
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "type": "mcp_tool_execution",
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "result": result_str[:2000],
+    }
+
+
+async def _gather_tools(req: ChatCompletionRequest) -> Tuple[Optional[List[Dict[str, Any]]], Set[str]]:
+    """Combine request ``functions`` + MCP server tools + Skill virtual tools.
+
+    Returns ``(tools, mcp_tool_names)`` where ``mcp_tool_names`` is the set of
+    tool names that originate from MCP servers (used for server_side routing).
+    """
     tools: List[Dict[str, Any]] = []
+    mcp_names: Set[str] = set()
     if req.functions:
-        # Legacy Qwen format -- forward as-is; the backend normalizes shape.
         tools.extend(req.functions)
     cm = get_config_manager()
     if cm.get_mcp_tool_call_mode() == "server_side":
@@ -334,10 +379,20 @@ async def _gather_tools(req: ChatCompletionRequest) -> Optional[List[Dict[str, A
 
             mm = get_mcp_manager()
             mcp_tools = await mm.list_all_tools()
+            for t in mcp_tools:
+                name = (t.get("function") or {}).get("name", "")
+                if name:
+                    mcp_names.add(name)
             tools.extend(mcp_tools)
         except Exception as e:
             LOG.warning("Failed to gather MCP tools: %r", e)
-    return tools or None
+    # Always advertise skill virtual tools so the LLM can ``read_skill`` / ``list_skills``.
+    try:
+        from core.skill_manager import get_skill_manager
+        tools.extend(get_skill_manager().virtual_tools())
+    except Exception as e:
+        LOG.warning("Failed to gather skill tools: %r", e)
+    return tools or None, mcp_names
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +411,7 @@ async def chat(
     backend = get_backend()
     provider_cfg = backend.config  # type: ignore[attr-defined]
     messages = _prepare_messages(request.messages, provider_cfg=provider_cfg)
-    tools = await _gather_tools(request)
+    tools, mcp_names = await _gather_tools(request)
 
     request_id = request.request_id or str(uuid.uuid4())
 
@@ -470,7 +525,7 @@ async def chat_on_setting(
     messages = _prepare_messages(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
-    tools = await _gather_tools(request)
+    tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
         {"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
@@ -489,47 +544,82 @@ async def chat_on_setting(
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
 
-    try:
-        result = await backend.generate(
-            messages=messages,
-            sampling=sampling,
-            tools=tools,
-            request_id=request_id,
-            extra_body=extra_body,
-        )
-    finally:
-        if request.abort_id:
-            _active_requests.pop(request.abort_id, None)
+    MAX_TOOL_ROUNDS = 5
+    result = None
+    thought = ""
+    answer = ""
+    async def _mcp_execute():
+        nonlocal result, thought, answer
+        try:
+            result = await backend.generate(
+                messages=messages,
+                sampling=sampling,
+                tools=tools,
+                request_id=request_id,
+                extra_body=extra_body,
+            )
+        finally:
+            if request.abort_id and result is None:
+                _active_requests.pop(request.abort_id, None)
+        thought, answer = _split_thought_and_answer(result.text)
+        if result.reasoning and not thought:
+            thought = result.reasoning
+        answer = _postprocess_answer(answer, request.character or "")
 
-    thought, answer = _split_thought_and_answer(result.text)
-    if result.reasoning and not thought:
-        thought = result.reasoning
-    answer = _postprocess_answer(answer, request.character or "")
-
-    if result.function_calls:
-        fc = result.function_calls[0]
-        func_name = fc.get("name", "")
-        func_args = fc.get("arguments", "")
-        response_message = ChatMessage(
-            role="assistant",
-            content=answer or "",
-            function_call={"name": func_name, "arguments": func_args},
-        )
-        choice = ChatCompletionResponseChoice(
-            index=index,
-            thought=thought,
-            embedding_list=embedding_index_list,
-            message=response_message,
-            finish_reason="function_call",
-        )
-    else:
-        choice = ChatCompletionResponseChoice(
+    async def _mcp_loop() -> Optional[ChatCompletionResponseChoice]:
+        nonlocal result, thought, answer
+        for _round in range(MAX_TOOL_ROUNDS):
+            await _mcp_execute()
+            if not result.function_calls:
+                return ChatCompletionResponseChoice(
+                    index=index,
+                    thought=thought,
+                    embedding_list=embedding_index_list,
+                    message=ChatMessage(role="assistant", content=answer),
+                    finish_reason=_map_finish_reason(result.finish_reason),
+                )
+            executed_any = False
+            for fc in result.function_calls:
+                name = fc.get("name", "")
+                if name in mcp_names:
+                    from core.mcp_manager import get_mcp_manager
+                    mm = get_mcp_manager()
+                    log_entry = await _execute_mcp_tool(mm, name, fc.get("arguments", "{}"), messages)
+                    if log_entry is not None:
+                        _append_vllm_request_log(log_entry)
+                    executed_any = True
+                else:
+                    # Frontend or Skill function — return to caller.
+                    fc = result.function_calls[0]
+                    return ChatCompletionResponseChoice(
+                        index=index,
+                        thought=thought,
+                        embedding_list=embedding_index_list,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=answer or "",
+                            function_call={
+                                "name": fc.get("name", ""),
+                                "arguments": fc.get("arguments", ""),
+                            },
+                        ),
+                        finish_reason="function_call",
+                    )
+            if not executed_any:
+                break  # no MCP tools to execute (shouldn't happen due to name check)
+        # Max rounds exhausted — return whatever text we have.
+        return ChatCompletionResponseChoice(
             index=index,
             thought=thought,
             embedding_list=embedding_index_list,
             message=ChatMessage(role="assistant", content=answer),
-            finish_reason=_map_finish_reason(result.finish_reason),
+            finish_reason=_map_finish_reason(result.finish_reason if result else "stop"),
         )
+
+    # --- Run tool loop -------------------------------------------------------
+    choice = await _mcp_loop()
+    if request.abort_id:
+        _active_requests.pop(request.abort_id, None)
     _append_vllm_request_log({
         "ts": request_ts,
         "character": request.character or "",
@@ -617,7 +707,7 @@ async def chat_on_setting_stream(
     messages = _prepare_messages(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
-    tools = await _gather_tools(request)
+    tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
         {"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
