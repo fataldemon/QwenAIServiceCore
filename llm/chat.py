@@ -40,7 +40,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from core.config_manager import get_config_manager
 from core.content_normalizer import (
-    expand_gif_parts,
     has_media,
     normalize_content,
     to_openai_content,
@@ -189,7 +188,7 @@ def _prepare_messages(
             continue
 
         parts = normalize_content(m.content)
-        parts = expand_gif_parts(parts)
+
         # Filter unsupported modalities so we never silently get a 400 from a
         # text-only provider just because the client sent an image.
         filtered = []
