@@ -382,6 +382,20 @@ async def chat(
     thought, answer = _split_thought_and_answer(result.text)
     if result.reasoning and not thought:
         thought = result.reasoning
+
+    if result.function_calls:
+        fc = result.function_calls[0]
+        return ChatCompletionResponseChoice(
+            index=0,
+            thought=thought,
+            embedding_list=[],
+            message=ChatMessage(
+                role="assistant",
+                content=answer or "",
+                function_call={"name": fc.get("name", ""), "arguments": fc.get("arguments", "")},
+            ),
+            finish_reason="function_call",
+        )
     return ChatCompletionResponseChoice(
         index=0,
         thought=thought,
@@ -492,7 +506,30 @@ async def chat_on_setting(
         thought = result.reasoning
     answer = _postprocess_answer(answer, request.character or "")
 
-    # Log the full vLLM request + response.
+    if result.function_calls:
+        fc = result.function_calls[0]
+        func_name = fc.get("name", "")
+        func_args = fc.get("arguments", "")
+        response_message = ChatMessage(
+            role="assistant",
+            content=answer or "",
+            function_call={"name": func_name, "arguments": func_args},
+        )
+        choice = ChatCompletionResponseChoice(
+            index=index,
+            thought=thought,
+            embedding_list=embedding_index_list,
+            message=response_message,
+            finish_reason="function_call",
+        )
+    else:
+        choice = ChatCompletionResponseChoice(
+            index=index,
+            thought=thought,
+            embedding_list=embedding_index_list,
+            message=ChatMessage(role="assistant", content=answer),
+            finish_reason=_map_finish_reason(result.finish_reason),
+        )
     _append_vllm_request_log({
         "ts": request_ts,
         "character": request.character or "",
@@ -508,6 +545,7 @@ async def chat_on_setting(
         },
         "response": {
             "finish_reason": result.finish_reason,
+            "function_calls": result.function_calls or None,
             "tokens": {
                 "prompt": result.prompt_tokens,
                 "completion": result.completion_tokens,
@@ -535,13 +573,7 @@ async def chat_on_setting(
     except Exception:
         pass  # Logging failure must never break the response.
 
-    return ChatCompletionResponseChoice(
-        index=index,
-        thought=thought,
-        embedding_list=embedding_index_list,
-        message=ChatMessage(role="assistant", content=answer),
-        finish_reason=_map_finish_reason(result.finish_reason),
-    )
+    return choice
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +648,7 @@ async def chat_on_setting_stream(
     )
 
     collected_text: List[str] = []
+    collected_function_calls: List[Dict[str, Any]] = []
 
     try:
         it = await backend.generate_stream(
@@ -628,6 +661,8 @@ async def chat_on_setting_stream(
         async for chunk in it:  # type: StreamChunk
             if chunk.text:
                 collected_text.append(chunk.text)
+            if chunk.function_calls:
+                collected_function_calls = chunk.function_calls
             if not chunk.text and not chunk.finish_reason:
                 continue
             yield ChatCompletionResponse(
@@ -680,6 +715,7 @@ async def chat_on_setting_stream(
             },
             "response": {
                 "finish_reason": "stop",
+                "function_calls": collected_function_calls or None,
                 "answer": clean_answer or full_answer,
                 "thought": thought,
             },
