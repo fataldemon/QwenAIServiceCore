@@ -275,6 +275,10 @@ def _split_thought_and_answer(text: str) -> Tuple[str, str]:
         m = re.search(r"<think>(.*?)</think>(.*)", text, re.DOTALL)
         if m:
             return m.group(1).strip(), m.group(2).strip()
+    # Qwen chat_template injects <think>, model outputs only </think>
+    if "</think>" in text:
+        parts = text.split("</think>", 1)
+        return parts[0].strip(), parts[1].strip()
     return "", text
 
 
