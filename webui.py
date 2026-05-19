@@ -10,6 +10,7 @@ client just to render a form.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import time
@@ -657,6 +658,24 @@ def _filter_chat_logs(character: str) -> Tuple[List[List[Any]], str]:
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_request_for_display(req: dict) -> dict:
+    """Deep copy the request dict, replace base64 data URIs with short placeholders."""
+    req = copy.deepcopy(req)
+    for msg in req.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                for media_key in ("image_url", "video_url", "audio_url"):
+                    media = part.get(media_key) or {}
+                    if isinstance(media, dict):
+                        url = media.get("url", "")
+                        if isinstance(url, str) and url.startswith("data:"):
+                            media["url"] = f"[base64 {media_key.lstrip('_')}, {len(url)} chars]"
+        elif isinstance(content, str) and content.startswith("data:"):
+            msg["content"] = f"[base64 data, {len(content)} chars]"
+    return req
+
+
 def _format_vllm_request_log() -> str:
     """Read the vLLM request log and return a formatted console-style string."""
     if not os.path.isfile(_VLLM_REQUEST_LOG_FILE):
@@ -700,7 +719,7 @@ def _format_vllm_request_log() -> str:
         parts.append(SEP)
 
         parts.append(f">>> REQUEST  ({base_url}/chat/completions)")
-        parts.append(json.dumps(req, ensure_ascii=False, indent=2))
+        parts.append(json.dumps(_sanitize_request_for_display(req), ensure_ascii=False, indent=2))
 
         parts.append(SEP)
         parts.append("<<< RESPONSE")
