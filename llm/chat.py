@@ -78,6 +78,7 @@ _active_requests: Dict[str, Tuple[str, str]] = {}  # abort_id -> (provider_name,
 _CHAT_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 _CHAT_LOG_FILE = os.path.join(_CHAT_LOG_DIR, "chat_log.jsonl")
 _CHAT_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_VLLM_REQUEST_LOG_FILE = os.path.join(_CHAT_LOG_DIR, "vllm_request_log.jsonl")
 
 
 def _append_chat_log(entry: Dict[str, Any]) -> None:
@@ -106,6 +107,27 @@ def _append_chat_log(entry: Dict[str, Any]) -> None:
             f.write(line)
     except Exception as e:
         LOG.debug("Failed to write chat log: %r", e)
+
+
+def _append_vllm_request_log(entry: Dict[str, Any]) -> None:
+    """Append one JSON line to the vLLM request log file."""
+    try:
+        os.makedirs(_CHAT_LOG_DIR, exist_ok=True)
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        with open(_VLLM_REQUEST_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        LOG.debug("Failed to write vLLM request log: %r", e)
+
+
+def truncate_vllm_request_log() -> None:
+    """Truncate the vLLM request log file to zero bytes."""
+    try:
+        os.makedirs(_CHAT_LOG_DIR, exist_ok=True)
+        with open(_VLLM_REQUEST_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+    except Exception as e:
+        LOG.debug("Failed to truncate vLLM request log: %r", e)
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +457,14 @@ async def chat_on_setting(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
     tools = await _gather_tools(request)
+    sampling = _sampling_from_request(request, max_tokens)
+    extra_body = (
+        {"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
+        if request.enable_thinking is not None
+        else None
+    )
+
+    request_ts = datetime.now(timezone.utc).isoformat()
 
     # Legacy abort: in the main-branch protocol, abort_id IS the request_id to cancel
     if request.abort_id:
@@ -448,12 +478,10 @@ async def chat_on_setting(
     try:
         result = await backend.generate(
             messages=messages,
-            sampling=_sampling_from_request(request, max_tokens),
+            sampling=sampling,
             tools=tools,
             request_id=request_id,
-            extra_body={"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
-            if request.enable_thinking is not None
-            else None,
+            extra_body=extra_body,
         )
     finally:
         if request.abort_id:
@@ -464,10 +492,35 @@ async def chat_on_setting(
         thought = result.reasoning
     answer = _postprocess_answer(answer, request.character or "")
 
+    # Log the full vLLM request + response.
+    _append_vllm_request_log({
+        "ts": request_ts,
+        "character": request.character or "",
+        "provider": provider_cfg.name,
+        "model": provider_cfg.model,
+        "base_url": provider_cfg.base_url,
+        "type": "non_streaming",
+        "request": {
+            "messages": messages,
+            "sampling": sampling,
+            "tools": tools,
+            "extra_body": extra_body,
+        },
+        "response": {
+            "finish_reason": result.finish_reason,
+            "tokens": {
+                "prompt": result.prompt_tokens,
+                "completion": result.completion_tokens,
+            },
+            "answer": answer,
+            "thought": thought,
+        },
+    })
+
     # Log the conversation turn to the chat log file.
     try:
         log_entry = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": request_ts,
             "character": request.character or "",
             "user": user_text,
             "assistant": answer,
@@ -533,6 +586,14 @@ async def chat_on_setting_stream(
         request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
     )
     tools = await _gather_tools(request)
+    sampling = _sampling_from_request(request, max_tokens)
+    extra_body = (
+        {"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
+        if request.enable_thinking is not None
+        else None
+    )
+
+    request_ts = datetime.now(timezone.utc).isoformat()
 
     request_id = request.request_id or str(uuid.uuid4())
     # Legacy abort: in the main-branch protocol, abort_id IS the request_id to cancel
@@ -559,12 +620,10 @@ async def chat_on_setting_stream(
     try:
         it = await backend.generate_stream(
             messages=messages,
-            sampling=_sampling_from_request(request, max_tokens),
+            sampling=sampling,
             tools=tools,
             request_id=request_id,
-            extra_body={"chat_template_kwargs": {"enable_thinking": bool(request.enable_thinking)}}
-            if request.enable_thinking is not None
-            else None,
+            extra_body=extra_body,
         )
         async for chunk in it:  # type: StreamChunk
             if chunk.text:
@@ -597,7 +656,7 @@ async def chat_on_setting_stream(
         if not thought:
             thought = ""
         log_entry = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": request_ts,
             "character": request.character or "",
             "user": user_text,
             "assistant": clean_answer or full_answer,
@@ -606,6 +665,25 @@ async def chat_on_setting_stream(
             "tokens": {},
         }
         _append_chat_log(log_entry)
+        _append_vllm_request_log({
+            "ts": request_ts,
+            "character": request.character or "",
+            "provider": provider_cfg.name,
+            "model": provider_cfg.model,
+            "base_url": provider_cfg.base_url,
+            "type": "streaming",
+            "request": {
+                "messages": messages,
+                "sampling": sampling,
+                "tools": tools,
+                "extra_body": extra_body,
+            },
+            "response": {
+                "finish_reason": "stop",
+                "answer": clean_answer or full_answer,
+                "thought": thought,
+            },
+        })
     except Exception:
         pass  # Logging failure must never break the response.
 

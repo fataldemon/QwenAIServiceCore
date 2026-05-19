@@ -62,6 +62,7 @@ from llm.chat import (
     chat,
     chat_on_setting,
     chat_on_setting_stream,
+    truncate_vllm_request_log,
 )
 from models.base import ChatCompletionRequest, ChatCompletionResponse
 from template import (
@@ -105,6 +106,12 @@ async def lifespan(app: FastAPI):
     get_config_manager()
     get_skill_manager()
     persona_manager = get_persona_manager()
+    # Capture the main event loop for Gradio callbacks (see webui._run).
+    try:
+        from webui import capture_main_loop  # type: ignore
+        capture_main_loop()
+    except Exception:
+        pass
     # Seed the legacy "Tendou Arisu" persona on first boot of an
     # upgraded deployment so existing front-ends keep getting the same
     # character behaviour without manual file authoring. Idempotent.
@@ -131,6 +138,12 @@ async def lifespan(app: FastAPI):
         LOG.info("Embedding model preloaded")
     except Exception as e:  # pragma: no cover -- best-effort
         LOG.warning("Embedding model preload failed: %r", e)
+    # Truncate vLLM request log on every startup for the real-time viewer.
+    try:
+        truncate_vllm_request_log()
+        LOG.info("vLLM request log truncated")
+    except Exception as e:  # pragma: no cover
+        LOG.warning("Failed to truncate vLLM request log: %r", e)
     yield
     # Graceful shutdown: close MCP sessions + backend HTTP clients.
     try:
