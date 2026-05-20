@@ -423,12 +423,18 @@ async def chat(
     if request.abort_id:
         _active_requests[request.abort_id] = (provider_cfg.name, request_id)
 
+    rtype = request.type or 0
+    extra_body = None
+    if rtype == 1:
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
     try:
         result = await backend.generate(
             messages=messages,
             sampling=_sampling_from_request(request, max_tokens),
             tools=tools,
             request_id=request_id,
+            extra_body=extra_body,
         )
     finally:
         if request.abort_id:
@@ -438,14 +444,13 @@ async def chat(
     if result.reasoning and not thought:
         thought = result.reasoning
 
-    rtype = request.type or 0
     if rtype == 1:
         add_knowledge(content=answer, character="_shared")
         return ChatCompletionResponseChoice(
             index=0,
             thought="",
             embedding_list=[],
-            message=ChatMessage(role="assistant", content="ok"),
+            message=ChatMessage(role="assistant", content=answer),
             finish_reason="stop",
         )
 
