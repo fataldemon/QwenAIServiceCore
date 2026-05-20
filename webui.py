@@ -45,17 +45,14 @@ _VLLM_REQUEST_LOG_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "logs", "vllm_request_log.jsonl"
 )
 
-_KNOWLEDGE_SUBJECTS_BY_CHAR = {
-    "_shared": ["knowledge"],
-    "__default__": ["setting", "expression"],
-}
-
 
 def _kb_subject_choices(character: str) -> List[str]:
     """Return valid subjects for a character."""
+    if not character:
+        return ["setting", "expression", "knowledge"]  # tolerate legacy "knowledge"
     if character == "_shared":
-        return _KNOWLEDGE_SUBJECTS_BY_CHAR["_shared"]
-    return _KNOWLEDGE_SUBJECTS_BY_CHAR["__default__"]
+        return ["knowledge"]
+    return ["setting", "expression"]
 
 
 _CUSTOM_CSS = """
@@ -631,15 +628,12 @@ def _preview_persona(character: str, user_text: str) -> str:
 
 def _kb_character_choices() -> List[str]:
     if not os.path.isdir(_EMBEDDING_ROOT):
-        return ["_shared"]
-    choices = sorted(
+        return []
+    return sorted(
         d for d in os.listdir(_EMBEDDING_ROOT)
         if os.path.isdir(os.path.join(_EMBEDDING_ROOT, d))
         and not d.startswith("__")
     )
-    if "_shared" not in choices:
-        choices.append("_shared")
-    return choices
 
 
 def _kb_refresh_choices() -> Tuple[gr.update, gr.update, str, str]:
@@ -764,6 +758,97 @@ def _kb_index_status(character: str, subject: str) -> str:
     materials = load_materials(character, subject)
     n_materials = len(materials) if materials else 0
     return f"Index: {n_total} vectors | Materials: {n_materials} rows | File: `{os.path.basename(p)}`"
+
+
+# ---------------------------------------------------------------------------
+# Shared Knowledge helpers (_shared/knowledge)
+# ---------------------------------------------------------------------------
+
+_SK_CHARACTER = "_shared"
+_SK_SUBJECT = "knowledge"
+
+
+def _sk_refresh_files() -> Tuple[gr.update, str]:
+    subject_dir = os.path.join(_EMBEDDING_ROOT, _SK_CHARACTER, _SK_SUBJECT)
+    if not os.path.isdir(subject_dir):
+        os.makedirs(subject_dir, exist_ok=True)
+    mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
+    if not mem_files:
+        return gr.update(choices=[], value=None), f"No `.mem` files in `{_SK_CHARACTER}/{_SK_SUBJECT}`."
+    return gr.update(choices=mem_files, value=mem_files[0]), f"{len(mem_files)} file(s)."
+
+
+def _sk_read_file(filename: str) -> str:
+    if not filename:
+        return ""
+    filepath = os.path.join(_EMBEDDING_ROOT, _SK_CHARACTER, _SK_SUBJECT, filename)
+    if not os.path.isfile(filepath):
+        return f"(file not found: {filename})"
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"(read error: {e})"
+
+
+def _sk_save_file(filename: str, content: str) -> str:
+    if not filename:
+        return "✗ filename required."
+    filepath = os.path.join(_EMBEDDING_ROOT, _SK_CHARACTER, _SK_SUBJECT, filename)
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"✓ saved `{filename}`"
+    except Exception as e:
+        return f"✗ {e}"
+
+
+def _sk_new_file(filename: str) -> Tuple[str, str]:
+    if not filename:
+        return "", "✗ filename is required."
+    if not filename.endswith(".mem"):
+        filename = filename + ".mem"
+    filepath = os.path.join(_EMBEDDING_ROOT, _SK_CHARACTER, _SK_SUBJECT, filename)
+    if os.path.isfile(filepath):
+        return "", f"✗ `{filename}` already exists."
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("")
+        return "", f"✓ created `{filename}`"
+    except Exception as e:
+        return "", f"✗ {e}"
+
+
+def _sk_rebuild_index() -> str:
+    from embedding.embedding import generate_vector
+    try:
+        result = generate_vector(_SK_CHARACTER, _SK_SUBJECT)
+        if result == "success":
+            return f"✓ index rebuilt for `{_SK_CHARACTER}/{_SK_SUBJECT}`"
+        elif result == "empty":
+            return f"⭘ no content, index removed for `{_SK_CHARACTER}/{_SK_SUBJECT}`"
+        else:
+            return f"✗ rebuild failed: {result}"
+    except Exception as e:
+        return f"✗ rebuild error: {e}"
+
+
+def _sk_index_status() -> str:
+    from embedding.data_store import load_materials, index_path
+    p = index_path(_SK_CHARACTER, _SK_SUBJECT)
+    if not os.path.exists(p):
+        return "No index file."
+    try:
+        import faiss
+        idx = faiss.read_index(p)
+        n_total = int(idx.ntotal)
+    except Exception:
+        n_total = 0
+    materials = load_materials(_SK_CHARACTER, _SK_SUBJECT)
+    n_materials = len(materials) if materials else 0
+    return f"Index: {n_total} vectors | Materials: {n_materials} rows"
 
 
 # ---------------------------------------------------------------------------
@@ -1285,6 +1370,54 @@ def build_admin_ui() -> "gr.Blocks":
 
             ui.load(_refresh_personas, None, [pe_table, pc_radio, pc_radio])
             ui.load(_kb_refresh_choices, None, [kb_character, kb_subject, kb_status, kb_content])
+
+        # ---------- Shared Knowledge ----------
+        with gr.Tab("Shared Knowledge"):
+            gr.Markdown(
+                "Shared knowledge base stored at `embedding/_shared/knowledge/`. "
+                "Knowledge here is available to all characters during retrieval. "
+                "Use `##tag` suffixes in `.mem` files to add tags to paragraphs."
+            )
+            sk_status = gr.Markdown()
+            sk_file_list = gr.Dropdown(
+                choices=[],
+                label=".mem file",
+                interactive=True,
+            )
+            with gr.Row():
+                sk_new_filename = gr.Textbox(
+                    label="New file name (e.g. new_knowledge.mem)",
+                    placeholder=".mem extension auto-added",
+                )
+                sk_new_btn = gr.Button("Create new file")
+            sk_content = gr.Code(
+                label="File content",
+                language="markdown",
+                lines=25,
+            )
+            with gr.Row():
+                sk_save = gr.Button("Save file", variant="primary")
+                sk_delete_file = gr.Button("Delete file", variant="stop")
+                sk_refresh = gr.Button("Refresh")
+            with gr.Row():
+                sk_rebuild = gr.Button("Rebuild FAISS index")
+                sk_index_status_btn = gr.Button("Show index status")
+            sk_index_info = gr.Markdown()
+            sk_action_msg = gr.Markdown()
+
+            sk_file_list.change(_sk_read_file, [sk_file_list], [sk_content])
+            sk_save.click(
+                _sk_save_file, [sk_file_list, sk_content], [sk_action_msg],
+            )
+            sk_new_btn.click(
+                _sk_new_file, [sk_new_filename], [sk_content, sk_action_msg],
+            ).then(
+                _sk_refresh_files, None, [sk_file_list, sk_status],
+            )
+            sk_refresh.click(_sk_refresh_files, None, [sk_file_list, sk_status])
+            sk_rebuild.click(_sk_rebuild_index, None, [sk_action_msg])
+            sk_index_status_btn.click(_sk_index_status, None, [sk_index_info])
+            ui.load(_sk_refresh_files, None, [sk_file_list, sk_status])
 
         # ---------- Conversation Logs (table) ----------
         with gr.Tab("Conversation Logs"):
