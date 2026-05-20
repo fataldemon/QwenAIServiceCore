@@ -646,6 +646,41 @@ def _kb_refresh_choices() -> Tuple[gr.update, gr.update, str, str]:
     )
 
 
+def _kb_on_character_change(character: str) -> Tuple[gr.update, gr.update, gr.update, str]:
+    """When character changes, reset subject to first valid choice (no subject input validation)."""
+    subjects = _kb_subject_choices(character)
+    subject = subjects[0] if subjects else ""
+    if not character or not subject:
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=subjects, value=None),
+            gr.update(),
+            f"Select both character and subject.",
+        )
+    subject_dir = os.path.join(_EMBEDDING_ROOT, character, subject)
+    if not os.path.isdir(subject_dir):
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=subjects, value=subject),
+            gr.update(),
+            f"No `{subject}` directory for `{character}`.",
+        )
+    mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
+    if not mem_files:
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=subjects, value=subject),
+            gr.update(),
+            f"No `.mem` files in `{character}/{subject}`.",
+        )
+    return (
+        gr.update(choices=mem_files, value=mem_files[0]),
+        gr.update(choices=subjects, value=subject),
+        gr.update(),
+        f"{len(mem_files)} file(s).",
+    )
+
+
 def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, gr.update, str, str]:
     if not character or not subject:
         return (
@@ -1334,7 +1369,7 @@ def build_admin_ui() -> "gr.Blocks":
             kb_action_msg = gr.Markdown()
 
             kb_character.change(
-                _kb_load_files, [kb_character, kb_subject],
+                _kb_on_character_change, [kb_character],
                 [kb_file_list, kb_subject, kb_file_list, kb_status],
             )
             kb_subject.change(
