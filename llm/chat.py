@@ -438,6 +438,17 @@ async def chat(
     if result.reasoning and not thought:
         thought = result.reasoning
 
+    rtype = request.type or 0
+    if rtype == 1:
+        add_knowledge(content=answer, character="_shared")
+        return ChatCompletionResponseChoice(
+            index=0,
+            thought="",
+            embedding_list=[],
+            message=ChatMessage(role="assistant", content="ok"),
+            finish_reason="stop",
+        )
+
     if result.function_calls:
         fc = result.function_calls[0]
         return ChatCompletionResponseChoice(
@@ -492,7 +503,7 @@ async def chat_on_setting(
         # Treat the last assistant message as the new knowledge to remember.
         for m in request.messages:
             if m.role == "assistant" and isinstance(m.content, str):
-                add_knowledge(m.content, request.character or "")
+                add_knowledge(m.content, "_shared")
         return ChatCompletionResponseChoice(
             index=index,
             thought="",

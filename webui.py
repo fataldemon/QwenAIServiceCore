@@ -45,7 +45,18 @@ _VLLM_REQUEST_LOG_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "logs", "vllm_request_log.jsonl"
 )
 
-_KNOWLEDGE_SUBJECTS = ["setting", "knowledge", "expression"]
+_KNOWLEDGE_SUBJECTS_BY_CHAR = {
+    "_shared": ["knowledge"],
+    "__default__": ["setting", "expression"],
+}
+
+
+def _kb_subject_choices(character: str) -> List[str]:
+    """Return valid subjects for a character."""
+    if character == "_shared":
+        return _KNOWLEDGE_SUBJECTS_BY_CHAR["_shared"]
+    return _KNOWLEDGE_SUBJECTS_BY_CHAR["__default__"]
+
 
 _CUSTOM_CSS = """
 #vllm-log-display textarea {
@@ -620,34 +631,60 @@ def _preview_persona(character: str, user_text: str) -> str:
 
 def _kb_character_choices() -> List[str]:
     if not os.path.isdir(_EMBEDDING_ROOT):
-        return []
-    return sorted(
+        return ["_shared"]
+    choices = sorted(
         d for d in os.listdir(_EMBEDDING_ROOT)
         if os.path.isdir(os.path.join(_EMBEDDING_ROOT, d))
         and not d.startswith("__")
     )
+    if "_shared" not in choices:
+        choices.append("_shared")
+    return choices
 
 
 def _kb_refresh_choices() -> Tuple[gr.update, gr.update, str, str]:
     choices = _kb_character_choices()
     return (
         gr.update(choices=choices),
-        gr.update(choices=_KNOWLEDGE_SUBJECTS),
+        gr.update(choices=_kb_subject_choices("")),
         "",
         "",
     )
 
 
-def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, str, str]:
+def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, gr.update, str, str]:
     if not character or not subject:
-        return gr.update(choices=[], value=None), "", f"Select both character and subject."
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=_kb_subject_choices(character)),
+            "",
+            f"Select both character and subject.",
+        )
+    subjects = _kb_subject_choices(character)
+    if subject not in subjects:
+        subject = subjects[0] if subjects else ""
     subject_dir = os.path.join(_EMBEDDING_ROOT, character, subject)
     if not os.path.isdir(subject_dir):
-        return gr.update(choices=[], value=None), "", f"No `{subject}` directory for `{character}`."
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=subjects, value=subject),
+            "",
+            f"No `{subject}` directory for `{character}`.",
+        )
     mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
     if not mem_files:
-        return gr.update(choices=[], value=None), "", f"No `.mem` files in `{character}/{subject}`."
-    return gr.update(choices=mem_files, value=mem_files[0]), mem_files[0] if mem_files else "", f"{len(mem_files)} file(s)."
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=subjects, value=subject),
+            "",
+            f"No `.mem` files in `{character}/{subject}`.",
+        )
+    return (
+        gr.update(choices=mem_files, value=mem_files[0]),
+        gr.update(choices=subjects, value=subject),
+        mem_files[0] if mem_files else "",
+        f"{len(mem_files)} file(s).",
+    )
 
 
 def _kb_read_file(character: str, subject: str, filename: str) -> str:
@@ -1181,7 +1218,7 @@ def build_admin_ui() -> "gr.Blocks":
                     label="Character",
                 )
                 kb_subject = gr.Dropdown(
-                    choices=_KNOWLEDGE_SUBJECTS,
+                    choices=_kb_subject_choices(""),
                     value="setting",
                     label="Subject (knowledge type)",
                 )
@@ -1213,15 +1250,15 @@ def build_admin_ui() -> "gr.Blocks":
 
             kb_character.change(
                 _kb_load_files, [kb_character, kb_subject],
-                [kb_file_list, kb_file_list, kb_status],
+                [kb_file_list, kb_subject, kb_file_list, kb_status],
             )
             kb_subject.change(
                 _kb_load_files, [kb_character, kb_subject],
-                [kb_file_list, kb_file_list, kb_status],
+                [kb_file_list, kb_subject, kb_file_list, kb_status],
             )
             kb_refresh_list.click(
                 _kb_load_files, [kb_character, kb_subject],
-                [kb_file_list, kb_file_list, kb_status],
+                [kb_file_list, kb_subject, kb_file_list, kb_status],
             )
             kb_file_list.change(
                 _kb_read_file, [kb_character, kb_subject, kb_file_list], [kb_content],
@@ -1237,7 +1274,7 @@ def build_admin_ui() -> "gr.Blocks":
                 [kb_content, kb_action_msg],
             ).then(
                 _kb_load_files, [kb_character, kb_subject],
-                [kb_file_list, kb_file_list, kb_status],
+                [kb_file_list, kb_subject, kb_file_list, kb_status],
             )
             kb_rebuild.click(
                 _kb_rebuild_index, [kb_character, kb_subject], [kb_action_msg],

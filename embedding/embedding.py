@@ -503,7 +503,7 @@ def process_embedding(
     )
     knowledge, _knowledge_idx = vector_search(
         question=content,
-        character=character,
+        character="_shared",
         subject="knowledge",
         top_k=3,
         instruct="给一句对话内容，找到涉及对话中出现的话题、人物、地点、组织、学校等信息的相关信息",
