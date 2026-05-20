@@ -192,20 +192,13 @@ def _prepare_messages(
 
         # --- Legacy function-call support (Qwen3.6 template uses ``tool`` role) ---
         if m.role == "function":
-            # Convert legacy ``function`` role to ``tool`` role with
-            # ``<tool_response>`` wrapper expected by Qwen3.6 chat template.
-            text_content = ""
-            if isinstance(m.content, str):
-                text_content = m.content
-            elif isinstance(m.content, list):
-                text_parts = []
-                for part in m.content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                text_content = " ".join(text_parts)
+            # Convert legacy ``function`` role to ``tool`` role.
+            # Process multimodal content (base64 images etc.) via normalize_content.
+            parts = normalize_content(m.content)
+            content_payload = to_openai_content(parts, prefetch_files=False)
             converted.append({
                 "role": "tool",
-                "content": f"<tool_response>\n{text_content}\n</tool_response>",
+                "content": content_payload,
             })
             continue
 
