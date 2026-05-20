@@ -49,7 +49,7 @@ _VLLM_REQUEST_LOG_FILE = os.path.join(
 def _kb_subject_choices(character: str) -> List[str]:
     """Return valid subjects for a character."""
     if not character:
-        return ["setting", "expression", "knowledge"]  # tolerate legacy "knowledge"
+        return ["setting", "expression"]
     if character == "_shared":
         return ["knowledge"]
     return ["setting", "expression"]
