@@ -633,6 +633,7 @@ def _kb_character_choices() -> List[str]:
         d for d in os.listdir(_EMBEDDING_ROOT)
         if os.path.isdir(os.path.join(_EMBEDDING_ROOT, d))
         and not d.startswith("__")
+        and d != "_shared"
     )
 
 
@@ -652,15 +653,15 @@ def _kb_on_character_change(character: str) -> Tuple[gr.update, gr.update, gr.up
     subject = subjects[0] if subjects else ""
     if not character or not subject:
         return (
-            gr.update(choices=[], value=None),
-            gr.update(choices=subjects, value=None),
+            gr.update(choices=[""], value=""),
+            gr.update(choices=subjects, value=""),
             gr.update(),
             f"Select both character and subject.",
         )
     subject_dir = os.path.join(_EMBEDDING_ROOT, character, subject)
     if not os.path.isdir(subject_dir):
         return (
-            gr.update(choices=[], value=None),
+            gr.update(choices=[""], value=""),
             gr.update(choices=subjects, value=subject),
             gr.update(),
             f"No `{subject}` directory for `{character}`.",
@@ -668,7 +669,7 @@ def _kb_on_character_change(character: str) -> Tuple[gr.update, gr.update, gr.up
     mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
     if not mem_files:
         return (
-            gr.update(choices=[], value=None),
+            gr.update(choices=[""], value=""),
             gr.update(choices=subjects, value=subject),
             gr.update(),
             f"No `.mem` files in `{character}/{subject}`.",
@@ -684,7 +685,7 @@ def _kb_on_character_change(character: str) -> Tuple[gr.update, gr.update, gr.up
 def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, gr.update, str, str]:
     if not character or not subject:
         return (
-            gr.update(choices=[], value=None),
+            gr.update(choices=[""], value=""),
             gr.update(choices=_kb_subject_choices(character)),
             "",
             f"Select both character and subject.",
@@ -695,7 +696,7 @@ def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, gr.update, 
     subject_dir = os.path.join(_EMBEDDING_ROOT, character, subject)
     if not os.path.isdir(subject_dir):
         return (
-            gr.update(choices=[], value=None),
+            gr.update(choices=[""], value=""),
             gr.update(choices=subjects, value=subject),
             "",
             f"No `{subject}` directory for `{character}`.",
@@ -703,7 +704,7 @@ def _kb_load_files(character: str, subject: str) -> Tuple[gr.update, gr.update, 
     mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
     if not mem_files:
         return (
-            gr.update(choices=[], value=None),
+            gr.update(choices=[""], value=""),
             gr.update(choices=subjects, value=subject),
             "",
             f"No `.mem` files in `{character}/{subject}`.",
@@ -809,7 +810,7 @@ def _sk_refresh_files() -> Tuple[gr.update, str]:
         os.makedirs(subject_dir, exist_ok=True)
     mem_files = sorted(f for f in os.listdir(subject_dir) if f.endswith(".mem"))
     if not mem_files:
-        return gr.update(choices=[], value=None), f"No `.mem` files in `{_SK_CHARACTER}/{_SK_SUBJECT}`."
+        return gr.update(choices=[""], value=""), f"No `.mem` files in `{_SK_CHARACTER}/{_SK_SUBJECT}`."
     return gr.update(choices=mem_files, value=mem_files[0]), f"{len(mem_files)} file(s)."
 
 
@@ -1344,7 +1345,7 @@ def build_admin_ui() -> "gr.Blocks":
                 )
                 kb_refresh_list = gr.Button("Refresh file list")
             kb_file_list = gr.Dropdown(
-                choices=[],
+                choices=[""], value="",
                 label=".mem file",
                 interactive=True,
             )
@@ -1415,7 +1416,7 @@ def build_admin_ui() -> "gr.Blocks":
             )
             sk_status = gr.Markdown()
             sk_file_list = gr.Dropdown(
-                choices=[],
+                choices=[""], value="",
                 label=".mem file",
                 interactive=True,
             )
