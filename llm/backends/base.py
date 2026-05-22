@@ -32,6 +32,8 @@ class StreamChunk:
     function_calls: List[Dict[str, Any]] = field(default_factory=list)
     finish_reason: str = ""
     raw: Optional[Dict[str, Any]] = None
+    """The upstream's raw JSON data object for this chunk (one per SSE frame).
+    Forwarded to the log and Request Monitor."""
 
 
 @dataclass
@@ -46,6 +48,9 @@ class GenerationResult:
     completion_tokens: int = 0
     raw: Optional[Dict[str, Any]] = None
     raw_events: List[Dict[str, Any]] = field(default_factory=list)
+    """Complete list of raw upstream JSON data objects for the full generation.
+    Populated by backends during ``generate()`` and logged to the vLLM
+    request log (``logs/vllm_request_log.jsonl``)."""
 
 
 class LLMBackend(ABC):

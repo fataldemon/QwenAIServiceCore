@@ -40,6 +40,18 @@ Provider **立即生效**，不需要重启网关。
 
 ## 日志
 
+网关写入两份结构化的 JSONL 日志，均位于 ``logs/`` 目录下：
+
+* ``logs/chat_log.jsonl`` — 精简的对话记录（用户输入、助手回复、思考过程、
+  finish_reason、时间戳）。文件大小超过 ~10 MB 时自动截断（丢弃最早 25% 的行）。
+* ``logs/vllm_request_log.jsonl`` — 完整的请求/响应遥测数据。
+  每次启动清空。每条记录包含：角色名、provider、模型名、base_url、完整的
+  messages 数组、采样参数、工具定义、extra_body、生成的回答、思考过程、
+  原始 SSE 事件（`raw_events`）、工具调用、token 统计。**Request Monitor**
+  标签页（`/admin`）正是读取此文件来展示的。
+
+两份文件都是人类可读的 JSONL 格式（每行一个 JSON 对象）。
+
 开发期使用 uvicorn 默认日志即可。生产环境建议 `LOG_LEVEL=INFO`，把
 stdout/stderr 接到现有日志收集系统。`/admin/api/` 的所有写操作
 （upsert / delete / set 等）默认 INFO 级别。

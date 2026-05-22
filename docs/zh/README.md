@@ -62,7 +62,8 @@ python main.py --server-port 8000 --server-name 0.0.0.0
 ```
 
 浏览器打开 <http://localhost:8000/admin> 进入 Gradio 管理面板
-（LLM Providers / MCP Servers / Skills 三个 Tab）。
+（LLM Providers / MCP Servers / Skills / Characters 五个 Tab，
+外加 **Request Monitor** 可实时查看请求遥测和原始 SSE 事件）。
 JSON 形式的管理接口在 `/admin/api/*`，详见
 [`API.zh.md`](API.zh.md)。
 

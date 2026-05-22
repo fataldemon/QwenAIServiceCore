@@ -57,8 +57,9 @@ python main.py --server-port 8000 --server-name 0.0.0.0
 ```
 
 Open <http://localhost:8000/admin> for the Gradio admin UI (LLM providers,
-MCP servers, skills). The JSON admin API is at `/admin/api/*` — see
-`docs/API.md`.
+MCP servers, skills, characters, and a **Request Monitor** with live
+request/response telemetry and raw SSE event viewer). The JSON admin API
+is at `/admin/api/*` — see `docs/API.md`.
 
 ## Streaming
 

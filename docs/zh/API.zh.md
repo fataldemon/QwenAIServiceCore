@@ -100,6 +100,19 @@ POST   /admin/api/personas/<character>/preview
 POST   /admin/api/abort/<abort_id>
 ```
 
+## Admin Gradio 管理面板
+
+`/admin` 上的 Gradio 界面包含以下标签页：
+
+| 标签页 | 用途 |
+|-----|---------|
+| **LLM Providers** | 添加、编辑、激活、删除 OpenAI 兼容的服务商。 |
+| **MCP Servers** | 配置 MCP 服务端连接（stdio 或 SSE）。 |
+| **Skills** | `skills/<name>/SKILL.md` 形式的 Skill 列表与重载。 |
+| **Characters** | Persona 编辑器（system 提示词、image_setting、reply_instruction）+ 知识库文件浏览器。 |
+| **Shared Knowledge** | 跨角色共享的知识库。 |
+| **Request Monitor** | 实时终端风格查看器，读取 `logs/vllm_request_log.jsonl`。展示完整请求载荷、采样参数、工具定义、响应文本、token 统计，以及可折叠展开的原始 SSE 事件。刷新周期可配置。 |
+
 ## Persona（角色人设）配置结构
 
 每个角色一份系统提示词，存放于 ``embedding/<character>/persona.json``。

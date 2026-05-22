@@ -17,6 +17,9 @@ behaviour** — the last part being the bulk of the document.
 QwenAIServiceCore/
 ├── main.py                    FastAPI app, route declarations, lifespan.
 ├── webui.py                   Gradio admin UI mounted at /admin.
+│                              (LLM Providers, MCP Servers, Skills,
+│                              Characters, Shared Knowledge,
+│                              Request Monitor with raw SSE viewer).
 ├── template.py                Static config (CLI flags, length budgets) +
 │                              one shared system fragment (REACT_INSTRUCTION).
 │                              Persona strings only live here as
@@ -162,6 +165,9 @@ contract whereby aborting a non-streaming request still returns a normal
 | Add a runtime-toggleable flag | `core/config_manager.py` (add field + persistence) + admin route + UI control. **Don't** use `os.environ` for these. | |
 | Change the WebSocket protocol | `main.py::websocket_endpoint` + `utils/websocketutils.py` | |
 | Strip control tokens like `<|endoftext|>` | `llm/chat.py::_postprocess_answer` | Already strips a couple — add more there. |
+| Add a field to the request/response log format | `llm/chat.py::_append_vllm_request_log` | The log entry dict is assembled at the call site — add your key there. Also update the monitor formatter in `webui.py::_format_vllm_request_log`. |
+| Surface a new field from the upstream SSE stream | `llm/backends/openai_compatible.py::generate_stream` (parse into `StreamChunk`), then `generate()` accumulates into `GenerationResult.raw_events`. | The `raw_events` field flows to the log and the Request Monitor. |
+| Change how image paths in ``image_setting`` are resolved | `llm/chat.py::_resolve_media_paths` | Resolves relative paths against `embedding/<character>/image/`. |
 
 If something genuinely doesn't fit any of the rows above, prefer adding
 a small module under `core/` and importing it from `llm/chat.py` rather
@@ -189,6 +195,11 @@ than fattening `main.py` or any backend.
 * **The legacy in-process `llm/local_llm_manage.py` is frozen.** Do not
   add new behaviour there. It exists only as a reference for what the
   legacy `main` branch did.
+* **Every backend must populate `raw_events` on `GenerationResult`** and
+  `raw` on each `StreamChunk`. The contract is that `raw` is the
+  upstream's raw SSE data (JSON object), and `raw_events` is the
+  complete list of all such objects for the full generation. This is
+  consumed by the Request Monitor and `logs/vllm_request_log.jsonl`.
 
 ---
 

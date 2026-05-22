@@ -14,7 +14,10 @@
 ```
 QwenAIServiceCore/
 ├── main.py                    FastAPI app，路由声明，lifespan。
-├── webui.py                   挂在 /admin 上的 Gradio 后台 UI。
+├── webui.py                   挂在 /admin 上的 Gradio 后台 UI，
+│                              （LLM Providers, MCP Servers, Skills,
+│                              Characters, Shared Knowledge,
+│                              Request Monitor 含原始 SSE 事件查看器）。
 ├── template.py                静态配置（CLI 参数、长度预算）+
 │                              一个跟角色无关的提示词片段
 │                              (REACT_INSTRUCTION)。
@@ -160,6 +163,9 @@ POST"，而是先 stream 再聚合——这样非流式请求被中途取消时�
 | 加一个运行时可切换的开关 | `core/config_manager.py`（加字段 + 持久化）+ admin 路由 + UI。**不要**用 `os.environ`。 | |
 | 改 WebSocket 协议 | `main.py::websocket_endpoint` + `utils/websocketutils.py` | |
 | 剥掉 `<|endoftext|>` 之类的控制 token | `llm/chat.py::_postprocess_answer` | 已经在剥几个了，按需补。 |
+| 给请求/响应日志增加字段 | `llm/chat.py::_append_vllm_request_log` | 日志 dict 在调用现场拼装 — 在那里加就好；同时更新 `webui.py::_format_vllm_request_log` 里的显示逻辑。 |
+| 从上游 SSE 流中提取新字段 | `llm/backends/openai_compatible.py::generate_stream`（解析到 `StreamChunk`），`generate()` 汇总到 `GenerationResult.raw_events`。 | `raw_events` 会一路流到日志和 Request Monitor。 |
+| 修改 `image_setting` 里图片路径的解析方式 | `llm/chat.py::_resolve_media_paths` | 相对路径会被拼接到 `embedding/<character>/image/` 下。 |
 
 如果某个修改实在套不进上表，优先在 `core/` 下加个小模块，让 `llm/chat.py`
 import 一下，而不是把 `main.py` 或某个 backend 越改越胖。
@@ -182,6 +188,10 @@ import 一下，而不是把 `main.py` 或某个 backend 越改越胖。
   即可（直接改文件或者走 admin UI）。
 * **`llm/local_llm_manage.py` 已冻结。** 不要往里加新行为，它只是
   旧 `main` 分支的代码参考。
+* **每个 backend 都必须为 `GenerationResult` 填充 `raw_events`**，
+  并为每个 `StreamChunk` 填充 `raw` 字段。约定是 `raw` 为上游的原始
+  SSE 数据（JSON 对象），`raw_events` 为本次生成的**完整**事件列表。
+  二者最终被 Request Monitor 和 `logs/vllm_request_log.jsonl` 消费。
 
 ---
 

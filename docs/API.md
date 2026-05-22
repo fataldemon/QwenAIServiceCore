@@ -106,6 +106,19 @@ POST   /admin/api/personas/<character>/preview
 POST   /admin/api/abort/<abort_id>
 ```
 
+## Admin Gradio UI
+
+The Gradio interface at `/admin` has these tabs:
+
+| Tab | Purpose |
+|-----|---------|
+| **LLM Providers** | Add, edit, activate, delete OpenAI-compatible providers. |
+| **MCP Servers** | Configure MCP server connections (stdio or SSE). |
+| **Skills** | Discovered skills from `skills/<name>/SKILL.md`, with reload. |
+| **Characters** | Persona editor (system prompt, image_setting, reply_instruction) + knowledge-base file browser. |
+| **Shared Knowledge** | Cross-character knowledge base. |
+| **Request Monitor** | Real-time terminal-style viewer of `logs/vllm_request_log.jsonl`. Shows full request payloads, sampling params, tools, response text, token counts, and raw SSE events (collapsible). Configurable refresh interval. |
+
 ## Persona config schema
 
 Per-character system prompt; stored at

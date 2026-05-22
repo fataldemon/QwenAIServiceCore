@@ -43,6 +43,20 @@ the gateway host; the default is `auto` (CUDA if available, else CPU).
 
 ## Logs
 
+The gateway writes two structured JSONL logs under ``logs/``:
+
+* ``logs/chat_log.jsonl`` — lightweight conversation records (user text,
+  assistant reply, thought, finish_reason, timestamps). Auto-truncated at
+  ~10 MB (oldest 25% dropped).
+* ``logs/vllm_request_log.jsonl`` — full request/response telemetry.
+  Cleared on every startup. Each entry contains: character, provider,
+  model, base_url, the complete messages array, sampling parameters,
+  tools, extra_body, the generated answer, thought, raw SSE events
+  (``raw_events``), function_calls, and token counts. This is what the
+  **Request Monitor** tab in ``/admin`` displays.
+
+Both files are human-readable JSONL (one JSON object per line).
+
 The default `uvicorn` logging is fine for development. For production set
 `LOG_LEVEL=INFO` and direct stdout/stderr to your usual log shipper. The
 admin REST API logs every `upsert_*` / `delete_*` / `set_*` at `INFO`.
