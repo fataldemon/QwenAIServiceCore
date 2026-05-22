@@ -916,10 +916,12 @@ async def abort_request(abort_id: str) -> bool:
 
 
 def _map_finish_reason(reason: str) -> str:
-    if reason in ("stop", "length", "function_call", "abort", "error"):
+    if reason in ("stop", "function_call", "abort", "error"):
         return reason
     if reason == "tool_calls":
         return "function_call"
+    if reason == "length":
+        return "overthink"
     if reason == "":
         return "stop"
     return "stop"
