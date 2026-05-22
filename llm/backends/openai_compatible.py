@@ -157,6 +157,7 @@ class OpenAICompatibleBackend(LLMBackend):
         prompt_tokens = 0
         completion_tokens = 0
         last_raw: Optional[Dict[str, Any]] = None
+        raw_events: List[Dict[str, Any]] = []
 
         it = await self.generate_stream(
             messages=messages,
@@ -176,6 +177,7 @@ class OpenAICompatibleBackend(LLMBackend):
                 function_calls = chunk.function_calls
             if chunk.raw is not None:
                 last_raw = chunk.raw
+                raw_events.append(chunk.raw)
                 usage = (chunk.raw or {}).get("usage") or {}
                 if usage:
                     prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
@@ -195,6 +197,7 @@ class OpenAICompatibleBackend(LLMBackend):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             raw=last_raw,
+            raw_events=raw_events,
         )
 
     # ----- streaming ---------------------------------------------------------

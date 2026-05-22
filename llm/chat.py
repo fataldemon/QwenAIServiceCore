@@ -80,6 +80,8 @@ _CHAT_LOG_FILE = os.path.join(_CHAT_LOG_DIR, "chat_log.jsonl")
 _CHAT_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 _VLLM_REQUEST_LOG_FILE = os.path.join(_CHAT_LOG_DIR, "vllm_request_log.jsonl")
 
+_EMBEDDING_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "embedding")
+
 
 def _append_chat_log(entry: Dict[str, Any]) -> None:
     """Append one JSON line to the chat log file.
@@ -159,11 +161,26 @@ def _provider_supports_media(provider_cfg) -> Tuple[bool, bool, bool]:
     )
 
 
+def _resolve_media_paths(parts: List[Any], character: str) -> List[Any]:
+    """Resolve relative file paths in ContentParts against ``embedding/<char>/image/``."""
+    if not character:
+        return parts
+    image_dir = os.path.join(_EMBEDDING_DIR, character, "image")
+    for part in parts:
+        ref = getattr(part, "ref", None)
+        if ref and ref.get("source") == "file":
+            path = ref.get("path", "")
+            if path and not os.path.isabs(path):
+                ref["path"] = os.path.join(image_dir, path)
+    return parts
+
+
 def _prepare_messages(
     raw_messages: List[ChatMessage],
     *,
     provider_cfg,
     system_prefix: str = "",
+    character: str = "",
 ) -> List[Dict[str, Any]]:
     """Turn the request's pydantic messages into upstream payload dicts.
 
@@ -174,6 +191,9 @@ def _prepare_messages(
     content wrapped in ``<tool_response>...</tool_response>`` tags, matching
     the Qwen3.6 chat template expectations. Legacy ``function_call`` on
     assistant messages is converted to the ``tool_calls`` format.
+
+    If ``character`` is provided, relative file paths in media placeholders
+    (``[image,file=...]``) are resolved against ``embedding/<char>/image/``.
     """
     supports_vision, supports_audio, supports_video = _provider_supports_media(provider_cfg)
     prefetch = bool(provider_cfg.prefetch_media)
@@ -195,6 +215,7 @@ def _prepare_messages(
             # Convert legacy ``function`` role to ``tool`` role.
             # Process multimodal content (base64 images etc.) via normalize_content.
             parts = normalize_content(m.content)
+            _resolve_media_paths(parts, character)
             content_payload = to_openai_content(parts, prefetch_files=False)
             converted.append({
                 "role": "tool",
@@ -216,6 +237,7 @@ def _prepare_messages(
                 filtered.append(p.__class__(kind="text", text="[视频已省略]"))
             else:
                 filtered.append(p)
+        _resolve_media_paths(filtered, character)
         content_payload = to_openai_content(filtered, prefetch_files=prefetch)
         msg: Dict[str, Any] = {"role": m.role, "content": content_payload}
         # Convert legacy ``function_call`` to ``tool_calls`` (Qwen3.6 format).
@@ -245,10 +267,15 @@ def _prepare_messages(
 # ---------------------------------------------------------------------------
 
 
-def _build_persona_system_prefix(character: str, embeddings_text: str) -> str:
+def _build_persona_system_prefix(character: str, embeddings_text: str) -> Tuple[str, Optional[str]]:
     """Build the system prompt prefix from the character's ``persona.json``.
 
-    If the character has no persona on disk we return an empty string -- the
+    Returns ``(system_prefix, image_setting)``.  ``image_setting`` is the
+    character's image-setting text (may contain ``[image,...]`` placeholders)
+    and should be inserted as a *user* message (not system) after the
+    system prompt, matching the legacy main-branch behaviour.
+
+    If the character has no persona on disk we return ``("", None)`` — the
     request becomes a generic completion without any character framing.
     This is intentional: the legacy hard-coded Alice prompt is gone, every
     persona is now data the operator can edit at runtime.
@@ -259,7 +286,7 @@ def _build_persona_system_prefix(character: str, embeddings_text: str) -> str:
     """
     persona = get_persona_manager().get_persona(character)
     if persona is None:
-        return ""
+        return "", None
     setting = persona.setting or ""
     if setting:
         if "{embeddings}" in setting:
@@ -273,7 +300,33 @@ def _build_persona_system_prefix(character: str, embeddings_text: str) -> str:
             setting = setting + "\n" + embeddings_text
     elif embeddings_text:
         setting = embeddings_text
-    return setting + (persona.reply_instruction or "")
+    system_prefix = setting + (persona.reply_instruction or "")
+    image_setting = persona.image_setting or None
+    return system_prefix, image_setting
+
+
+_CONVERSATION_START_SEPARATOR = (
+    "----------------------CONVERSATION START FROM HERE------------------------------"
+)
+
+
+def _insert_image_setting(messages: List[Dict[str, Any]], image_setting: str, prefetch_files: bool = False, character: str = "") -> None:
+    """Insert ``image_setting`` as a user message after the system prompt.
+
+    Replicates the legacy main-branch behaviour: the character's visual
+    setting (containing ``[image,file=...]`` placeholders) is placed as a
+    ``role="user"`` message, followed by a separator line, so that images
+    are sent as user content (not system) and the model can see them.
+    """
+    parts = normalize_content(image_setting)
+    _resolve_media_paths(parts, character)
+    img_content = to_openai_content(parts, prefetch_files=prefetch_files)
+    insert_pos = 1 if (messages and messages[0].get("role") == "system") else 0
+    messages.insert(insert_pos, {"role": "user", "content": img_content})
+    messages.insert(
+        insert_pos + 1,
+        {"role": "user", "content": _CONVERSATION_START_SEPARATOR},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -527,13 +580,18 @@ async def chat_on_setting(
         except Exception as e:
             LOG.warning("process_embedding failed: %r", e)
             embeddings_text = ""
-    system_prefix = _build_persona_system_prefix(
+    system_prefix, image_setting = _build_persona_system_prefix(
         request.character or "", embeddings_text
     )
 
     messages = _prepare_messages(
-        request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
+        request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix,
+        character=request.character or "",
     )
+    if image_setting:
+        _insert_image_setting(messages, image_setting,
+                              prefetch_files=bool(provider_cfg.prefetch_media),
+                              character=request.character or "")
     tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
@@ -598,6 +656,8 @@ async def chat_on_setting(
                 },
                 "answer": answer,
                 "thought": thought,
+                "raw_text": result.text,
+                "raw_events": result.raw_events,
             },
         })
 
@@ -712,12 +772,17 @@ async def chat_on_setting_stream(
         except Exception as e:
             LOG.warning("process_embedding failed: %r", e)
 
-    system_prefix = _build_persona_system_prefix(
+    system_prefix, image_setting = _build_persona_system_prefix(
         request.character or "", embeddings_text
     )
     messages = _prepare_messages(
-        request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix
+        request.messages, provider_cfg=provider_cfg, system_prefix=system_prefix,
+        character=request.character or "",
     )
+    if image_setting:
+        _insert_image_setting(messages, image_setting,
+                              prefetch_files=bool(provider_cfg.prefetch_media),
+                              character=request.character or "")
     tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
@@ -750,6 +815,7 @@ async def chat_on_setting_stream(
 
     collected_text: List[str] = []
     collected_function_calls: List[Dict[str, Any]] = []
+    collected_raw_events: List[Dict[str, Any]] = []
 
     try:
         it = await backend.generate_stream(
@@ -760,6 +826,8 @@ async def chat_on_setting_stream(
             extra_body=extra_body,
         )
         async for chunk in it:  # type: StreamChunk
+            if chunk.raw is not None:
+                collected_raw_events.append(chunk.raw)
             if chunk.text:
                 collected_text.append(chunk.text)
             if chunk.function_calls:
@@ -819,6 +887,8 @@ async def chat_on_setting_stream(
                 "function_calls": collected_function_calls or None,
                 "answer": clean_answer or full_answer,
                 "thought": thought,
+                "raw_text": full_answer,
+                "raw_events": collected_raw_events,
             },
         })
     except Exception:

@@ -45,6 +45,7 @@ class GenerationResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     raw: Optional[Dict[str, Any]] = None
+    raw_events: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class LLMBackend(ABC):

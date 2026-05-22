@@ -10,7 +10,7 @@ client just to render a form.
 from __future__ import annotations
 
 import asyncio
-import copy
+import html
 import json
 import os
 import time
@@ -38,9 +38,6 @@ def capture_main_loop() -> None:
 _EMBEDDING_ROOT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "embedding"
 )
-_CHAT_LOG_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "logs", "chat_log.jsonl"
-)
 _VLLM_REQUEST_LOG_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "logs", "vllm_request_log.jsonl"
 )
@@ -56,17 +53,6 @@ def _kb_subject_choices(character: str) -> List[str]:
 
 
 _CUSTOM_CSS = """
-#vllm-log-display textarea {
-    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace !important;
-    font-size: 13px !important;
-    line-height: 1.5 !important;
-    background: #1a1a2e !important;
-    color: #c9d1d9 !important;
-    border: 1px solid #30363d !important;
-}
-#vllm-log-display label {
-    color: #58a6ff !important;
-}
 footer { visibility: hidden !important; }
 """
 
@@ -617,8 +603,13 @@ def _preview_persona(character: str, user_text: str) -> str:
                 client_information="",
             )
         except Exception as e:
-            return f"(process_embedding failed: {e!r})\n\n" + _build_persona_system_prefix(character, "")
-    return _build_persona_system_prefix(character, embeddings_text)
+            sys_prefix, _ = _build_persona_system_prefix(character, "")
+            return f"(process_embedding failed: {e!r})\n\n" + sys_prefix
+    sys_prefix, img_setting = _build_persona_system_prefix(character, embeddings_text)
+    result = sys_prefix
+    if img_setting:
+        result += "\n\n" + img_setting + "\n\n----------------------CONVERSATION START FROM HERE------------------------------"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -892,87 +883,79 @@ def _sk_index_status() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_chat_logs(limit: int = 200) -> List[List[Any]]:
-    if not os.path.isfile(_CHAT_LOG_FILE):
-        return []
-    try:
-        with open(_CHAT_LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception:
-        return []
-    rows: List[List[Any]] = []
-    for line in lines[-limit:]:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        rows.append([
-            entry.get("ts", "")[-23:-7] if entry.get("ts") else "",
-            entry.get("character", ""),
-            entry.get("user", "")[:80],
-            entry.get("assistant", "")[:120],
-            entry.get("thought", "")[:60] if entry.get("thought") else "",
-            entry.get("finish_reason", ""),
-            entry.get("tokens", {}).get("prompt", ""),
-            entry.get("tokens", {}).get("completion", ""),
-        ])
-    return rows[::-1]
-
-
-def _refresh_chat_logs() -> Tuple[List[List[Any]], str]:
-    rows = _read_chat_logs(200)
-    return rows, f"{len(rows)} log entries (newest first)"
-
-
-def _filter_chat_logs(character: str) -> Tuple[List[List[Any]], str]:
-    all_rows = _read_chat_logs(2000)
-    if not character:
-        return all_rows[:200], f"{min(len(all_rows), 200)} log entries"
-    filtered = [r for r in all_rows if r[1] == character]
-    return filtered[:200], f"{len(filtered)} entries for `{character}`"
-
-
 # ---------------------------------------------------------------------------
 # vLLM Request Log helpers (real-time console viewer)
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_request_for_display(req: dict) -> dict:
-    """Deep copy the request dict, replace base64 data URIs with short placeholders."""
-    req = copy.deepcopy(req)
-    for msg in req.get("messages", []):
-        content = msg.get("content")
-        if isinstance(content, list):
-            for part in content:
-                for media_key in ("image_url", "video_url", "audio_url"):
-                    media = part.get(media_key) or {}
-                    if isinstance(media, dict):
-                        url = media.get("url", "")
-                        if isinstance(url, str) and url.startswith("data:"):
-                            media["url"] = f"[base64 {media_key.lstrip('_')}, {len(url)} chars]"
-        elif isinstance(content, str) and content.startswith("data:"):
-            msg["content"] = f"[base64 data, {len(content)} chars]"
-    return req
-
-
 def _format_vllm_request_log() -> str:
-    """Read the vLLM request log and return a formatted console-style string."""
+    """Read the vLLM request log and return a terminal-style HTML string."""
     if not os.path.isfile(_VLLM_REQUEST_LOG_FILE):
-        return "(no request log yet — send a chat request to see entries)"
-
-    SEP = "─" * 80
+        return _wrap_terminal_html(
+            "(no request log yet &mdash; send a chat request to see entries)"
+        )
 
     try:
         with open(_VLLM_REQUEST_LOG_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
     except Exception as e:
-        return f"(error reading log: {e})"
+        return _wrap_terminal_html(f"(error reading log: {html.escape(str(e))})")
 
     if not lines:
-        return "(request log is empty)"
+        return _wrap_terminal_html("(request log is empty)")
+
+    SEP_CHAR = "─"
+    SEP_LEN = 120
+    SEP = SEP_CHAR * SEP_LEN
+    C_SEP   = "#555555"
+    C_META  = "#8b8b8b"
+    C_HEAD  = "#3b8eea"
+    C_RESP  = "#16c60c"
+    C_ERR   = "#e74856"
+    C_TEXT  = "#cccccc"
+    C_TOOL  = "#c19c00"
+    C_RAW   = "#6a9955"
+
+    def _span(color: str, text: str, bold: bool = False) -> str:
+        fw = ";font-weight:bold" if bold else ""
+        return f'<span style="color:{color}{fw}">{html.escape(text)}</span>'
+
+    def _span_ns(color: str, text: str, bold: bool = False) -> str:
+        fw = ";font-weight:bold" if bold else ""
+        return f'<span style="color:{color}{fw}">{text}</span>'
+
+    def _msg_text(msg: Dict[str, Any]) -> str:
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            pieces = []
+            for item in content:
+                if isinstance(item, dict):
+                    t = item.get("text") or ""
+                    if t:
+                        pieces.append(t)
+                    elif item.get("type") in ("image_url", "video_url", "audio_url"):
+                        pieces.append(f"[{item['type'].rstrip('_url')}]")
+            return "".join(pieces)
+        return str(content) if content else ""
+
+    def _fmt_tool_def(t: Dict[str, Any], idx: int) -> str:
+        fn = t.get("function") or t
+        name = html.escape(str(fn.get("name", "?")))
+        desc = fn.get("description", "") or ""
+        params = fn.get("parameters") or {}
+        props = params.get("properties") or {}
+        param_parts = []
+        if isinstance(props, dict):
+            for pn, pv in props.items():
+                pt = pv.get("type", "?") if isinstance(pv, dict) else "?"
+                param_parts.append(f"{pn}:{pt}")
+        params_str = ", ".join(param_parts)
+        line = f"    [{idx}] {name}({params_str})"
+        if desc:
+            line += f"  →  {desc[:120]}"
+        return line
 
     parts: List[str] = []
     for line in lines:
@@ -984,50 +967,200 @@ def _format_vllm_request_log() -> str:
         except json.JSONDecodeError:
             continue
 
-        ts = entry.get("ts", "")[:19].replace("T", " ")
-        character = entry.get("character", "")
-        provider = entry.get("provider", "")
-        model = entry.get("model", "")
-        base_url = entry.get("base_url", "")
-        req_type = entry.get("type", "")
+        ts = html.escape(entry.get("ts", "")[:19].replace("T", " "))
+        req_type = html.escape(entry.get("type", "") or "")
+
+        # --- mcp_tool_execution has a different shape ---
+        if req_type == "mcp_tool_execution":
+            tool_name = html.escape(entry.get("tool_name", "?"))
+            args = html.escape(str(entry.get("arguments", ""))[:120])
+            result = html.escape(str(entry.get("result", ""))[:300])
+            parts.append(_span_ns(C_SEP, SEP))
+            parts.append(
+                f'{_span_ns(C_HEAD, ">>> TOOL EXECUTION", bold=True)}'
+                f'  {_span_ns(C_META, f"[{ts}]")}  '
+                f'{_span_ns(C_TOOL, tool_name)}'
+            )
+            parts.append(f'{_span_ns(C_META, "    args:")}  {args}')
+            parts.append(f'{_span_ns(C_META, "    result:")}  {result}')
+            parts.append(_span_ns(C_SEP, SEP))
+            continue
+
+        character = html.escape(entry.get("character", "") or "")
+        provider = html.escape(entry.get("provider", "") or "")
+        model = html.escape(entry.get("model", "") or "")
         req = entry.get("request") or {}
         resp = entry.get("response") or {}
 
-        parts.append(SEP)
+        parts.append(_span_ns(C_SEP, SEP))
         parts.append(
-            f"[{ts}]  character={character}  provider={provider}  "
-            f"model={model}  type={req_type}"
+            f'{_span_ns(C_META, "[")}{ts}'
+            f'{_span_ns(C_META, "]  character=")}{character}'
+            f'{_span_ns(C_META, "  provider=")}{provider}'
+            f'{_span_ns(C_META, "  model=")}{model}'
+            f'{_span_ns(C_META, "  type=")}{req_type}'
         )
-        parts.append(SEP)
 
-        parts.append(f">>> REQUEST  ({base_url}/chat/completions)")
-        parts.append(json.dumps(_sanitize_request_for_display(req), ensure_ascii=False, indent=2))
+        # ---- SAMPLING ----
+        sampling = req.get("sampling") or {}
+        extra_body = req.get("extra_body") or {}
+        extra_inner = extra_body.get("chat_template_kwargs") or {}
+        enable_thinking = extra_inner.get("enable_thinking")
 
-        parts.append(SEP)
-        parts.append("<<< RESPONSE")
-        resp_lines = []
+        samp_parts: List[str] = []
+        for k in ("temperature", "top_p", "top_k", "max_tokens",
+                  "presence_penalty", "repetition_penalty"):
+            v = sampling.get(k)
+            if v is not None:
+                samp_parts.append(f"{k}={v}")
+        if enable_thinking is not None:
+            samp_parts.append(f"enable_thinking={enable_thinking}")
+        stop = sampling.get("stop")
+        if stop:
+            samp_parts.append(f"stop={html.escape(str(stop)[:40])}")
+
+        parts.append(_span_ns(C_HEAD, ">>> SAMPLING", bold=True))
+        if samp_parts:
+            parts.append(f'{_span_ns(C_TEXT, "    ")}{"  ".join(samp_parts)}')
+        else:
+            parts.append(_span_ns(C_META, "    (no sampling params)"))
+
+        # ---- TOOLS ----
+        tools = req.get("tools") or []
+        parts.append(_span_ns(C_HEAD, ">>> TOOLS", bold=True))
+        if tools:
+            for idx, t in enumerate(tools, 1):
+                parts.append(_span_ns(C_TEXT, _fmt_tool_def(t, idx)))
+        else:
+            parts.append(_span_ns(C_META, "    no tools defined"))
+
+        # ---- MESSAGES (history + latest) ----
+        messages = req.get("messages") or []
+        # Find the index of the last user message
+        last_user_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx >= 0:
+            history_msgs = messages[:last_user_idx]
+            latest_msg = messages[last_user_idx]
+        else:
+            history_msgs = messages
+            latest_msg = None
+
+        parts.append(_span_ns(C_HEAD, ">>> HISTORY", bold=True))
+        if history_msgs:
+            for msg in history_msgs:
+                role = msg.get("role", "?")
+                tool_calls = msg.get("tool_calls") or []
+                text = _msg_text(msg)
+                text_1l = text.replace("\n", "\\n").replace("\r", "")
+                if tool_calls:
+                    for tc in tool_calls:
+                        fc = tc.get("function") or {}
+                        tc_name = html.escape(str(fc.get("name", "?")))
+                        tc_args = html.escape(str(fc.get("arguments", ""))[:100])
+                        parts.append(
+                            _span_ns(C_TOOL, "    [" + role + " → tool_call: " + tc_name + "]")
+                            + "  " + _span(C_TEXT, tc_args)
+                        )
+                    if text_1l:
+                        parts.append(
+                            _span_ns(C_META, "    [" + role + "]")
+                            + "  " + _span(C_TEXT, text_1l)
+                        )
+                else:
+                    parts.append(
+                        _span_ns(C_META, "    [" + role + "]")
+                        + "  " + _span(C_TEXT, text_1l)
+                    )
+        else:
+            parts.append(_span_ns(C_META, "    (no history)"))
+
+        if latest_msg is not None:
+            latest_text = _msg_text(latest_msg)
+            role_label = html.escape(str(latest_msg.get("role", "?")))
+            indented = "\n    ".join(latest_text.split("\n"))
+            parts.append(_span_ns(C_HEAD, ">>> LATEST MESSAGE", bold=True))
+            parts.append(
+                _span_ns(C_META, "    [" + role_label + "]")
+                + "  " + _span(C_TEXT, indented)
+            )
+
+        parts.append(_span_ns(C_SEP, SEP_CHAR * 60))
+
+        # ---- RESPONSE ----
         finish = resp.get("finish_reason", "")
+        resp_color = C_ERR if finish == "error" else C_RESP
+        parts.append(_span_ns(resp_color, "<<< RESPONSE", bold=True))
+
         tokens = resp.get("tokens") or {}
         if tokens:
-            resp_lines.append(
-                f"prompt_tokens={tokens.get('prompt','?')}  "
-                f"completion_tokens={tokens.get('completion','?')}  "
-                f"finish_reason={finish}"
+            parts.append(
+                _span_ns(C_META,
+                    f"    finish_reason={finish}  "
+                    f"prompt_tk={tokens.get('prompt','?')}  "
+                    f"completion_tk={tokens.get('completion','?')}"
+                )
             )
         else:
-            resp_lines.append(f"finish_reason={finish}")
-        answer = resp.get("answer", "")
-        thought = resp.get("thought", "")
-        if thought:
-            resp_lines.append(f"thought: {thought[:500]}")
-        if answer:
-            resp_lines.append(f"answer: {answer[:1000]}")
-        parts.extend(resp_lines)
-        parts.append(SEP)
+            parts.append(_span_ns(C_META, f"    finish_reason={html.escape(str(finish))}"))
 
-    # Reverse so newest appears at the top of the text box.
-    parts.reverse()
-    return "\n".join(parts)
+        raw_text = resp.get("raw_text", "")
+        if raw_text:
+            indented = "\n    ".join(raw_text.split("\n"))
+            parts.append(_span(C_TEXT, "    " + indented[:5000]))
+        if not raw_text:
+            parts.append(_span_ns(C_META, "    (empty response body)"))
+
+        # ---- RAW SSE EVENTS (collapsible) ----
+        raw_events = resp.get("raw_events") or []
+        if raw_events:
+            parts.append("")
+            parts.append('<details>')
+            parts.append(
+                '<summary style="cursor:pointer;color:#6a9955;font-weight:bold">'
+                '    ── RAW SSE EVENTS (' + str(len(raw_events)) + ' chunks) ──'
+                '</summary>'
+            )
+            for idx, ev in enumerate(raw_events, 1):
+                ev_str = json.dumps(ev, ensure_ascii=False)
+                if len(ev_str) > 500:
+                    ev_str = ev_str[:500] + "  ... (" + str(len(json.dumps(ev, ensure_ascii=False))) + " chars)"
+                parts.append(
+                    _span_ns(C_META, "    [" + str(idx) + "]")
+                    + "  " + _span(C_RAW, ev_str)
+                )
+            parts.append('</details>')
+
+        parts.append(_span_ns(C_SEP, SEP))
+
+    return _wrap_terminal_html("\n".join(parts))
+
+
+def _wrap_terminal_html(body: str) -> str:
+    return (
+        '<div style="'
+        'background:#0c0c0c;color:#cccccc;'
+        'font-family:\'Cascadia Code\',\'Fira Code\',\'JetBrains Mono\',\'Consolas\',monospace;'
+        'font-size:13px;line-height:1.55;padding:12px;'
+        'max-height:80vh;overflow:auto;'
+        'border:1px solid #333333;border-radius:4px'
+        '" id="term-console">'
+        '<pre style="'
+        'margin:0;background:transparent;border:none;color:inherit;font:inherit;'
+        'white-space:pre;word-wrap:normal'
+        '">'
+        + body +
+        '</pre>'
+        '</div>'
+        '<img src="" '
+        'onerror="var c=document.getElementById(\'term-console\');'
+        'if(c)c.scrollTop=c.scrollHeight;this.remove()"'
+        ' style="display:none">'
+    )
 
 
 _last_log_mtime = 0.0
@@ -1455,38 +1588,13 @@ def build_admin_ui() -> "gr.Blocks":
             sk_index_status_btn.click(_sk_index_status, None, [sk_index_info])
             ui.load(_sk_refresh_files, None, [sk_file_list, sk_status])
 
-        # ---------- Conversation Logs (table) ----------
-        with gr.Tab("Conversation Logs"):
-            gr.Markdown(
-                "Recent chat conversation logs from `logs/chat_log.jsonl`. "
-                "Newest entries appear first."
-            )
-            log_status = gr.Markdown()
-            log_filter = gr.Dropdown(
-                choices=[""] + _persona_choices(),
-                label="Filter by character (empty = show all)",
-                value="",
-            )
-            with gr.Row():
-                log_refresh = gr.Button("Refresh")
-            log_table = gr.Dataframe(
-                headers=["time", "character", "user", "assistant",
-                         "thought", "finish", "prompt_tk", "completion_tk"],
-                interactive=False,
-                wrap=True,
-            )
-
-            log_filter.change(_filter_chat_logs, [log_filter], [log_table, log_status])
-            log_refresh.click(_refresh_chat_logs, None, [log_table, log_status])
-            ui.load(_refresh_chat_logs, None, [log_table, log_status])
-
         # ---------- Request Monitor (real-time vLLM request log) ----------
         with gr.Tab("Request Monitor"):
             gr.Markdown(
-                "Real-time console showing the full vLLM request payloads "
-                "(including system prompts) and responses. "
+                "Structured console showing sampling params, tools, "
+                "history, latest message, response and raw SSE events. "
                 "Log file: `logs/vllm_request_log.jsonl` (cleared on each startup). "
-                "Newest entries appear at the top."
+                "Chronological order (oldest first)."
             )
             with gr.Row():
                 log_interval = gr.Slider(
@@ -1495,14 +1603,9 @@ def build_admin_ui() -> "gr.Blocks":
                 )
                 log_force = gr.Button("Refresh now")
             monitor_status = gr.Markdown()
-            monitor_display = gr.Textbox(
-                label="vLLM Request Log",
-                lines=35,
-                max_lines=200,
-                interactive=False,
-                elem_id="vllm-log-display",
-                autoscroll=False,
-                value="(waiting for requests — auto-refreshes every few seconds)",
+            monitor_display = gr.HTML(
+                value="(waiting for requests &mdash; auto-refreshes every few seconds)",
+                sanitize_html=False,
             )
             timer = gr.Timer(value=3, active=True)
 
