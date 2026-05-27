@@ -1111,7 +1111,7 @@ def _format_vllm_request_log() -> str:
         raw_text = resp.get("raw_text", "")
         if raw_text:
             indented = "\n    ".join(raw_text.split("\n"))
-            parts.append(_span(C_TEXT, "    " + indented[:5000]))
+            parts.append(_span(C_TEXT, "    " + indented))
         if not raw_text:
             parts.append(_span_ns(C_META, "    (empty response body)"))
 
