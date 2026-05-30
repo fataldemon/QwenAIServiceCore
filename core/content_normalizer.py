@@ -18,11 +18,10 @@ provider. Order is preserved relative to where each piece appears in the
 original input -- this is essential for vision-language models where the
 position of an image relative to the surrounding text changes interpretation.
 
-GIFs are special: they are expanded locally into a sequence of image frames
-(via Pillow) because vLLM does not currently treat GIFs as videos. All other
-media types are passed through as references (``file:`` / ``http(s):`` /
-``data:`` URIs), letting vLLM's media pipeline do the heavy lifting on the
-server side.
+GIFs are converted locally to MP4 (via ffmpeg) and sent as ``video_url``,
+since vLLM's video pipeline can process MP4 with proper temporal context.
+If ffmpeg is unavailable, GIFs fall back to being sent as raw ``video_url``
+or expanded into individual image frames (via Pillow) as a last resort.
 
 When ``prefetch_files=True`` or the provider config has ``prefetch_media=true``,
 **HTTP(S) URLs for all media types (image/audio/video) are downloaded locally
@@ -466,6 +465,69 @@ def _guess_mime_from_path(path: str, fallback: str) -> str:
     return mime or fallback
 
 
+def _gif_bytes_to_mp4(gif_bytes: bytes, fps: int = 2) -> Optional[bytes]:
+    """Convert GIF bytes to MP4 via ffmpeg. Returns None if unavailable/error."""
+    import subprocess
+    import tempfile
+    gif_path = None
+    mp4_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".gif", delete=False) as f:
+            f.write(gif_bytes)
+            gif_path = f.name
+        mp4_path = gif_path + ".mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", gif_path,
+                "-vf", f"fps={fps},scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-movflags", "faststart",
+                "-an",
+                mp4_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+        if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+            with open(mp4_path, "rb") as f:
+                return f.read()
+    except Exception as e:
+        LOG.warning("GIF → MP4 conversion failed: %r", e)
+    finally:
+        for p in (gif_path, mp4_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+    return None
+
+
+def _get_gif_bytes(ref: Dict[str, Any]) -> Optional[bytes]:
+    """Extract raw GIF bytes from any ref type (file, base64, url)."""
+    source = ref.get("source")
+    if source == "base64":
+        data = ref.get("data", "")
+        try:
+            return base64.b64decode(data)
+        except Exception:
+            return None
+    if source == "file":
+        path = ref.get("path", "")
+        if path and os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except OSError:
+                pass
+    if source == "url":
+        url = ref.get("url", "")
+        if url.startswith(("http://", "https://")):
+            result = _prefetch_url(url)
+            if result is not None:
+                return result[0]
+    return None
+
+
 def _ref_to_openai_url(
     ref: Dict[str, Any],
     *,
@@ -562,17 +624,27 @@ def to_openai_content(
         if p.kind == "text":
             out.append({"type": "text", "text": p.text or ""})
         elif p.kind == "image":
-            # 自动检测 GIF → 转换为 video
             if _looks_like_gif(p):
-                url = _ref_to_openai_url(
-                    p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
-                )
+                fps = int(p.options.get("fps", 2))
+                gif_bytes = _get_gif_bytes(p.ref or {})
+                if gif_bytes:
+                    mp4_bytes = _gif_bytes_to_mp4(gif_bytes, fps=fps)
+                    if mp4_bytes:
+                        b64 = base64.b64encode(mp4_bytes).decode("ascii")
+                        url = f"data:video/mp4;base64,{b64}"
+                    else:
+                        url = _ref_to_openai_url(
+                            p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
+                        )
+                else:
+                    url = _ref_to_openai_url(
+                        p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
+                    )
                 if url is None:
                     if fallback_text:
                         out.append({"type": "text", "text": fallback_text})
                     continue
                 video_part = {"type": "video_url", "video_url": {"url": url}}
-                # 透传 max_frames / fps 参数（如果存在）
                 for k in ("max_frames", "fps"):
                     if k in p.options:
                         video_part["video_url"][k] = p.options[k]
@@ -621,10 +693,21 @@ def to_openai_content(
                     video_part["video_url"][k] = p.options[k]
             out.append(video_part)
         elif p.kind == "gif":
-            # 如果还有遗留的 gif kind，同样转为 video
-            url = _ref_to_openai_url(
-                p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
-            )
+            fps = int(p.options.get("fps", 2))
+            gif_bytes = _get_gif_bytes(p.ref or {})
+            if gif_bytes:
+                mp4_bytes = _gif_bytes_to_mp4(gif_bytes, fps=fps)
+                if mp4_bytes:
+                    b64 = base64.b64encode(mp4_bytes).decode("ascii")
+                    url = f"data:video/mp4;base64,{b64}"
+                else:
+                    url = _ref_to_openai_url(
+                        p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
+                    )
+            else:
+                url = _ref_to_openai_url(
+                    p.ref or {}, fallback_mime="video/mp4", prefetch=prefetch_files
+                )
             if url is None:
                 if fallback_text:
                     out.append({"type": "text", "text": fallback_text})
