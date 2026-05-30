@@ -310,16 +310,37 @@ _CONVERSATION_START_SEPARATOR = (
 )
 
 
-def _insert_image_setting(messages: List[Dict[str, Any]], image_setting: str, prefetch_files: bool = False, character: str = "") -> None:
+def _insert_image_setting(messages: List[Dict[str, Any]], image_setting: str, prefetch_files: bool = False, character: str = "", provider_cfg=None) -> None:
     """Insert ``image_setting`` as a user message after the system prompt.
 
     Replicates the legacy main-branch behaviour: the character's visual
     setting (containing ``[image,file=...]`` placeholders) is placed as a
     ``role="user"`` message, followed by a separator line, so that images
     are sent as user content (not system) and the model can see them.
+
+    If ``provider_cfg`` is provided, media types unsupported by that
+    provider are replaced with text placeholders (same logic as
+    ``_prepare_messages``).
     """
     parts = normalize_content(image_setting)
     _resolve_media_paths(parts, character)
+
+    if provider_cfg is not None:
+        supports_vision = bool(provider_cfg.supports_vision)
+        supports_audio = bool(provider_cfg.supports_audio)
+        supports_video = bool(provider_cfg.supports_video)
+        filtered = []
+        for p in parts:
+            if p.kind == "image" and not supports_vision:
+                filtered.append(p.__class__(kind="text", text="[图片已省略]"))
+            elif p.kind == "audio" and not supports_audio:
+                filtered.append(p.__class__(kind="text", text="[音频已省略]"))
+            elif p.kind == "video" and not supports_video:
+                filtered.append(p.__class__(kind="text", text="[视频已省略]"))
+            else:
+                filtered.append(p)
+        parts = filtered
+
     img_content = to_openai_content(parts, prefetch_files=prefetch_files)
     insert_pos = 1 if (messages and messages[0].get("role") == "system") else 0
     messages.insert(insert_pos, {"role": "user", "content": img_content})
@@ -591,7 +612,8 @@ async def chat_on_setting(
     if image_setting:
         _insert_image_setting(messages, image_setting,
                               prefetch_files=bool(provider_cfg.prefetch_media),
-                              character=request.character or "")
+                              character=request.character or "",
+                              provider_cfg=provider_cfg)
     tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
@@ -782,7 +804,8 @@ async def chat_on_setting_stream(
     if image_setting:
         _insert_image_setting(messages, image_setting,
                               prefetch_files=bool(provider_cfg.prefetch_media),
-                              character=request.character or "")
+                              character=request.character or "",
+                              provider_cfg=provider_cfg)
     tools, mcp_names = await _gather_tools(request)
     sampling = _sampling_from_request(request, max_tokens)
     extra_body = (
